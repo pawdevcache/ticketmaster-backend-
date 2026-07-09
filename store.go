@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
-	"fmt"
-	"strings"
-	"sync"
 	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 var (
@@ -14,119 +17,128 @@ var (
 	ErrUnauthorized = errors.New("unauthorized")
 )
 
-// Store is a thread-safe in-memory datastore. Swap the maps for a DB layer
-// without touching the handlers.
+// Store is a MongoDB-backed datastore.
 type Store struct {
-	mu       sync.RWMutex
-	seq      int
-	classes  map[string]*Classification
-	attracts map[string]*Attraction
-	venues   map[string]*Venue
-	events   map[string]*Event
-	users    map[string]*User
-	bookings map[string]*Booking
-	tokens   map[string]string // token -> userID
+	db       *mongo.Database
+	classes  *mongo.Collection
+	attracts *mongo.Collection
+	venues   *mongo.Collection
+	events   *mongo.Collection
+	users    *mongo.Collection
+	bookings *mongo.Collection
+	tokens   *mongo.Collection
 }
 
-func NewStore() *Store {
-	return &Store{
-		classes:  map[string]*Classification{},
-		attracts: map[string]*Attraction{},
-		venues:   map[string]*Venue{},
-		events:   map[string]*Event{},
-		users:    map[string]*User{},
-		bookings: map[string]*Booking{},
-		tokens:   map[string]string{},
+func NewStore(uri, dbName string) (*Store, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	if err != nil {
+		return nil, err
 	}
+	if err := client.Ping(ctx, nil); err != nil {
+		return nil, err
+	}
+	db := client.Database(dbName)
+	return &Store{
+		db:       db,
+		classes:  db.Collection("classifications"),
+		attracts: db.Collection("attractions"),
+		venues:   db.Collection("venues"),
+		events:   db.Collection("events"),
+		users:    db.Collection("users"),
+		bookings: db.Collection("bookings"),
+		tokens:   db.Collection("tokens"),
+	}, nil
 }
 
-func (s *Store) id(prefix string) string { s.seq++; return fmt.Sprintf("%s%03d", prefix, s.seq) }
+func ctx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 5*time.Second)
+}
 
-func contains(hay, needle string) bool {
-	return needle == "" || strings.Contains(strings.ToLower(hay), strings.ToLower(needle))
+func newID() string { return primitive.NewObjectID().Hex() }
+
+// like builds a case-insensitive "contains" regex filter, or nil to skip.
+func like(field, value string) bson.E {
+	return bson.E{Key: field, Value: primitive.Regex{Pattern: value, Options: "i"}}
+}
+
+func findAll[T any](c *mongo.Collection, filter bson.D) ([]*T, error) {
+	cx, cancel := ctx()
+	defer cancel()
+	cur, err := c.Find(cx, filter)
+	if err != nil {
+		return nil, err
+	}
+	out := []*T{}
+	if err := cur.All(cx, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func findOne[T any](c *mongo.Collection, filter bson.D) (*T, error) {
+	cx, cancel := ctx()
+	defer cancel()
+	var v T
+	err := c.FindOne(cx, filter).Decode(&v)
+	if err == mongo.ErrNoDocuments {
+		return nil, ErrNotFound
+	}
+	return &v, err
+}
+
+func insert(c *mongo.Collection, doc any) error {
+	cx, cancel := ctx()
+	defer cancel()
+	_, err := c.InsertOne(cx, doc)
+	return err
 }
 
 // --- Classifications ---
 
-func (s *Store) Classifications() []*Classification {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := []*Classification{}
-	for _, c := range s.classes {
-		out = append(out, c)
-	}
-	return out
+func (s *Store) Classifications() ([]*Classification, error) {
+	return findAll[Classification](s.classes, bson.D{})
 }
-
 func (s *Store) Classification(id string) (*Classification, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if c, ok := s.classes[id]; ok {
-		return c, nil
-	}
-	return nil, ErrNotFound
+	return findOne[Classification](s.classes, bson.D{{Key: "_id", Value: id}})
 }
 
 // --- Attractions ---
 
-func (s *Store) Attractions(keyword string) []*Attraction {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := []*Attraction{}
-	for _, a := range s.attracts {
-		if contains(a.Name, keyword) {
-			out = append(out, a)
-		}
+func (s *Store) Attractions(keyword string) ([]*Attraction, error) {
+	f := bson.D{}
+	if keyword != "" {
+		f = append(f, like("name", keyword))
 	}
-	return out
+	return findAll[Attraction](s.attracts, f)
 }
-
 func (s *Store) Attraction(id string) (*Attraction, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if a, ok := s.attracts[id]; ok {
-		return a, nil
-	}
-	return nil, ErrNotFound
+	return findOne[Attraction](s.attracts, bson.D{{Key: "_id", Value: id}})
 }
-
-func (s *Store) CreateAttraction(a *Attraction) *Attraction {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	a.ID = s.id("K")
-	s.attracts[a.ID] = a
-	return a
+func (s *Store) CreateAttraction(a *Attraction) error {
+	a.ID = newID()
+	return insert(s.attracts, a)
 }
 
 // --- Venues ---
 
-func (s *Store) Venues(keyword, city string) []*Venue {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := []*Venue{}
-	for _, v := range s.venues {
-		if contains(v.Name, keyword) && contains(v.City, city) {
-			out = append(out, v)
-		}
+func (s *Store) Venues(keyword, city string) ([]*Venue, error) {
+	f := bson.D{}
+	if keyword != "" {
+		f = append(f, like("name", keyword))
 	}
-	return out
+	if city != "" {
+		f = append(f, like("city", city))
+	}
+	return findAll[Venue](s.venues, f)
 }
-
 func (s *Store) Venue(id string) (*Venue, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if v, ok := s.venues[id]; ok {
-		return v, nil
-	}
-	return nil, ErrNotFound
+	return findOne[Venue](s.venues, bson.D{{Key: "_id", Value: id}})
 }
-
-func (s *Store) CreateVenue(v *Venue) *Venue {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	v.ID = s.id("V")
-	s.venues[v.ID] = v
-	return v
+func (s *Store) CreateVenue(v *Venue) error {
+	v.ID = newID()
+	return insert(s.venues, v)
 }
 
 // --- Events ---
@@ -136,142 +148,129 @@ type EventFilter struct {
 	StartAfter                      time.Time
 }
 
-func (s *Store) Events(f EventFilter) []*Event {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := []*Event{}
-	for _, e := range s.events {
-		if !contains(e.Name, f.Keyword) {
-			continue
-		}
-		if f.ClassificationID != "" && e.ClassificationID != f.ClassificationID {
-			continue
-		}
-		if !f.StartAfter.IsZero() && e.Date.Before(f.StartAfter) {
-			continue
-		}
-		if f.City != "" {
-			if v, ok := s.venues[e.VenueID]; !ok || !contains(v.City, f.City) {
-				continue
-			}
-		}
-		out = append(out, e)
+func (s *Store) Events(f EventFilter) ([]*Event, error) {
+	q := bson.D{}
+	if f.Keyword != "" {
+		q = append(q, like("name", f.Keyword))
 	}
-	return out
+	if f.ClassificationID != "" {
+		q = append(q, bson.E{Key: "classificationId", Value: f.ClassificationID})
+	}
+	if !f.StartAfter.IsZero() {
+		q = append(q, bson.E{Key: "date", Value: bson.D{{Key: "$gte", Value: f.StartAfter}}})
+	}
+	if f.City != "" {
+		vs, err := s.Venues("", f.City)
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]string, len(vs))
+		for i, v := range vs {
+			ids[i] = v.ID
+		}
+		q = append(q, bson.E{Key: "venueId", Value: bson.D{{Key: "$in", Value: ids}}})
+	}
+	return findAll[Event](s.events, q)
 }
-
 func (s *Store) Event(id string) (*Event, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if e, ok := s.events[id]; ok {
-		return e, nil
-	}
-	return nil, ErrNotFound
+	return findOne[Event](s.events, bson.D{{Key: "_id", Value: id}})
 }
-
-func (s *Store) CreateEvent(e *Event) *Event {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e.ID = s.id("E")
+func (s *Store) CreateEvent(e *Event) error {
+	e.ID = newID()
 	if e.Status == "" {
 		e.Status = "onsale"
 	}
-	s.events[e.ID] = e
-	return e
+	return insert(s.events, e)
 }
 
 // --- Users & auth ---
 
-func (s *Store) Register(u *User) *User {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	u.ID = s.id("U")
-	s.users[u.ID] = u
-	return u
+func (s *Store) Register(u *User) error {
+	u.ID = newID()
+	return insert(s.users, u)
 }
 
 func (s *Store) Login(email, password string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, u := range s.users {
-		if u.Email == email && u.Password == password {
-			tok := s.id("T")
-			s.tokens[tok] = u.ID
-			return tok, nil
-		}
+	u, err := findOne[User](s.users, bson.D{{Key: "email", Value: email}, {Key: "password", Value: password}})
+	if err != nil {
+		return "", ErrUnauthorized
 	}
-	return "", ErrUnauthorized
+	tok := newID()
+	return tok, insert(s.tokens, bson.D{{Key: "_id", Value: tok}, {Key: "userId", Value: u.ID}})
 }
 
 func (s *Store) UserByToken(tok string) (*User, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if uid, ok := s.tokens[tok]; ok {
-		return s.users[uid], nil
+	if tok == "" {
+		return nil, ErrUnauthorized
 	}
-	return nil, ErrUnauthorized
+	t, err := findOne[struct {
+		UserID string `bson:"userId"`
+	}](s.tokens, bson.D{{Key: "_id", Value: tok}})
+	if err != nil {
+		return nil, ErrUnauthorized
+	}
+	return s.userByID(t.UserID)
+}
+
+func (s *Store) userByID(id string) (*User, error) {
+	return findOne[User](s.users, bson.D{{Key: "_id", Value: id}})
 }
 
 // --- Bookings ---
 
 func (s *Store) Book(userID, eventID string, qty int) (*Booking, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.events[eventID]
-	if !ok {
-		return nil, ErrNotFound
-	}
-	if e.Status != "onsale" || qty < 1 || e.Available() < qty {
+	if qty < 1 {
 		return nil, ErrSoldOut
 	}
-	e.TicketsSold += qty
-	b := &Booking{
-		ID:        s.id("B"),
-		UserID:    userID,
-		EventID:   eventID,
-		Quantity:  qty,
-		Total:     e.PriceMin * float64(qty),
-		Status:    "confirmed",
-		CreatedAt: time.Now(),
+	if _, err := s.Event(eventID); err != nil {
+		return nil, err // ErrNotFound
 	}
-	s.bookings[b.ID] = b
-	return b, nil
+	// Atomically reserve tickets only if enough remain and the event is on sale.
+	cx, cancel := ctx()
+	defer cancel()
+	var e Event
+	err := s.events.FindOneAndUpdate(cx,
+		bson.D{
+			{Key: "_id", Value: eventID},
+			{Key: "status", Value: "onsale"},
+			{Key: "$expr", Value: bson.D{{Key: "$gte", Value: bson.A{
+				bson.D{{Key: "$subtract", Value: bson.A{"$ticketsTotal", "$ticketsSold"}}}, qty}}}},
+		},
+		bson.D{{Key: "$inc", Value: bson.D{{Key: "ticketsSold", Value: qty}}}},
+		options.FindOneAndUpdate().SetReturnDocument(options.After),
+	).Decode(&e)
+	if err == mongo.ErrNoDocuments {
+		return nil, ErrSoldOut
+	}
+	if err != nil {
+		return nil, err
+	}
+	b := &Booking{
+		ID: newID(), UserID: userID, EventID: eventID, Quantity: qty,
+		Total: e.PriceMin * float64(qty), Status: "confirmed", CreatedAt: time.Now(),
+	}
+	return b, insert(s.bookings, b)
 }
 
 func (s *Store) Booking(id, userID string) (*Booking, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	b, ok := s.bookings[id]
-	if !ok || b.UserID != userID {
-		return nil, ErrNotFound
-	}
-	return b, nil
+	return findOne[Booking](s.bookings, bson.D{{Key: "_id", Value: id}, {Key: "userId", Value: userID}})
 }
 
-func (s *Store) UserBookings(userID string) []*Booking {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := []*Booking{}
-	for _, b := range s.bookings {
-		if b.UserID == userID {
-			out = append(out, b)
-		}
-	}
-	return out
+func (s *Store) UserBookings(userID string) ([]*Booking, error) {
+	return findAll[Booking](s.bookings, bson.D{{Key: "userId", Value: userID}})
 }
 
 func (s *Store) CancelBooking(id, userID string) (*Booking, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	b, ok := s.bookings[id]
-	if !ok || b.UserID != userID {
-		return nil, ErrNotFound
+	b, err := s.Booking(id, userID)
+	if err != nil {
+		return nil, err
 	}
 	if b.Status == "confirmed" {
+		cx, cancel := ctx()
+		defer cancel()
+		s.bookings.UpdateByID(cx, id, bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "cancelled"}}}})
+		s.events.UpdateByID(cx, b.EventID, bson.D{{Key: "$inc", Value: bson.D{{Key: "ticketsSold", Value: -b.Quantity}}}})
 		b.Status = "cancelled"
-		if e, ok := s.events[b.EventID]; ok {
-			e.TicketsSold -= b.Quantity
-		}
 	}
 	return b, nil
 }

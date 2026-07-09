@@ -7,8 +7,15 @@ import (
 
 func main() {
 	loadEnv(".env")
-	store := NewStore()
-	store.Seed()
+	store, err := NewStore(env("MONGO_URI", "mongodb://localhost:27017"), env("DB_NAME", "ticketmaster"))
+	if err != nil {
+		log.Fatal("mongo connect: ", err)
+	}
+	if env("SEED", "false") == "true" {
+		if err := store.Seed(); err != nil {
+			log.Fatal("seed: ", err)
+		}
+	}
 	s := &Server{store: store}
 
 	mux := http.NewServeMux()

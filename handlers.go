@@ -72,7 +72,12 @@ func (s *Server) searchEvents(w http.ResponseWriter, r *http.Request) {
 	if t, err := time.Parse(time.RFC3339, q.Get("startDateTime")); err == nil {
 		f.StartAfter = t
 	}
-	paginate(w, "events", s.store.Events(f), r)
+	events, err := s.store.Events(f)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	paginate(w, "events", events, r)
 }
 
 func (s *Server) getEvent(w http.ResponseWriter, r *http.Request) {
@@ -90,14 +95,23 @@ func (s *Server) createEvent(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	writeJSON(w, http.StatusCreated, s.store.CreateEvent(&e))
+	if err := s.store.CreateEvent(&e); err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, e)
 }
 
 // --- discovery: venues ---
 
 func (s *Server) searchVenues(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	paginate(w, "venues", s.store.Venues(q.Get("keyword"), q.Get("city")), r)
+	venues, err := s.store.Venues(q.Get("keyword"), q.Get("city"))
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	paginate(w, "venues", venues, r)
 }
 
 func (s *Server) getVenue(w http.ResponseWriter, r *http.Request) {
@@ -115,13 +129,22 @@ func (s *Server) createVenue(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	writeJSON(w, http.StatusCreated, s.store.CreateVenue(&v))
+	if err := s.store.CreateVenue(&v); err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, v)
 }
 
 // --- discovery: attractions ---
 
 func (s *Server) searchAttractions(w http.ResponseWriter, r *http.Request) {
-	paginate(w, "attractions", s.store.Attractions(r.URL.Query().Get("keyword")), r)
+	attractions, err := s.store.Attractions(r.URL.Query().Get("keyword"))
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	paginate(w, "attractions", attractions, r)
 }
 
 func (s *Server) getAttraction(w http.ResponseWriter, r *http.Request) {
@@ -139,13 +162,22 @@ func (s *Server) createAttraction(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	writeJSON(w, http.StatusCreated, s.store.CreateAttraction(&a))
+	if err := s.store.CreateAttraction(&a); err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, a)
 }
 
 // --- discovery: classifications ---
 
 func (s *Server) searchClassifications(w http.ResponseWriter, r *http.Request) {
-	paginate(w, "classifications", s.store.Classifications(), r)
+	classes, err := s.store.Classifications()
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	paginate(w, "classifications", classes, r)
 }
 
 func (s *Server) getClassification(w http.ResponseWriter, r *http.Request) {
@@ -165,9 +197,12 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "name, email, password required")
 		return
 	}
-	created := *s.store.Register(&u)
-	created.Password = "" // hide from response without mutating the stored record
-	writeJSON(w, http.StatusCreated, created)
+	if err := s.store.Register(&u); err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	u.Password = "" // hide from response
+	writeJSON(w, http.StatusCreated, u)
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
@@ -212,7 +247,12 @@ func (s *Server) listBookings(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.store.UserBookings(u.ID))
+	bookings, err := s.store.UserBookings(u.ID)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, bookings)
 }
 
 func (s *Server) getBooking(w http.ResponseWriter, r *http.Request) {
