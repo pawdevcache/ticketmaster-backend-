@@ -28,7 +28,7 @@ type Venue struct {
 type Event struct {
 	ID               string    `json:"id" bson:"_id"`
 	Name             string    `json:"name" bson:"name"`
-	Date             time.Time `json:"date" bson:"date"`
+	Date             Date      `json:"date" bson:"date"`
 	VenueID          string    `json:"venueId" bson:"venueId"`
 	AttractionIDs    []string  `json:"attractionIds" bson:"attractionIds"`
 	ClassificationID string    `json:"classificationId" bson:"classificationId"`
@@ -37,6 +37,8 @@ type Event struct {
 	TicketsTotal     int       `json:"ticketsTotal" bson:"ticketsTotal"`
 	TicketsSold      int       `json:"ticketsSold" bson:"ticketsSold"`
 	Status           string    `json:"status" bson:"status"` // onsale, offsale, cancelled
+	Description      string    `json:"description"`
+	Title            string    `json:"title"`
 }
 
 type User struct {
