@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"sync"
 
-	"ticketmaster/internal/tm"
+	"ticketmaster/tm"
 )
 
 // The handler is built once per warm serverless instance and reused across

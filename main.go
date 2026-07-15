@@ -4,7 +4,7 @@ import (
 	"log"
 	"net/http"
 
-	"ticketmaster/internal/tm"
+	"ticketmaster/tm"
 )
 
 // Local development server. On Vercel, api/index.go is the entrypoint instead.
