@@ -3,6 +3,8 @@ package tm
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -17,6 +19,16 @@ var (
 	ErrUnauthorized = errors.New("unauthorized")
 )
 
+// redactURI strips credentials so a connection string is safe to log or return.
+func redactURI(uri string) string {
+	scheme := strings.Index(uri, "://")
+	at := strings.LastIndex(uri, "@")
+	if scheme >= 0 && at > scheme {
+		return uri[:scheme+3] + "***@" + uri[at+1:]
+	}
+	return uri
+}
+
 // Store is a MongoDB-backed datastore.
 type Store struct {
 	db       *mongo.Database
@@ -30,14 +42,19 @@ type Store struct {
 }
 
 func NewStore(uri, dbName string) (*Store, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Fail fast: a serverless function is killed at ~10s, so we must surface a
+	// readable error well before that rather than blocking on retries.
+	cx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+	opts := options.Client().ApplyURI(uri).
+		SetServerSelectionTimeout(4 * time.Second).
+		SetConnectTimeout(4 * time.Second)
+	client, err := mongo.Connect(cx, opts)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mongo connect %s: %w", redactURI(uri), err)
 	}
-	if err := client.Ping(ctx, nil); err != nil {
-		return nil, err
+	if err := client.Ping(cx, nil); err != nil {
+		return nil, fmt.Errorf("mongo unreachable at %s: %w", redactURI(uri), err)
 	}
 	db := client.Database(dbName)
 	return &Store{
