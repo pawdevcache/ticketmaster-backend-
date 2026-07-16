@@ -14,7 +14,11 @@ func New() (http.Handler, error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, 200, map[string]string{"status": "ok"})
+		if err := store.Ping(); err != nil {
+			writeJSON(w, 200, map[string]string{"status": "degraded", "db": "disconnected", "error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "ok", "db": "connected"})
 	})
 
 	// Discovery API (read + admin create)

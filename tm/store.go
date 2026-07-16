@@ -31,6 +31,8 @@ func redactURI(uri string) string {
 
 // Store is a MongoDB-backed datastore.
 type Store struct {
+	uri      string
+	client   *mongo.Client
 	db       *mongo.Database
 	classes  *mongo.Collection
 	attracts *mongo.Collection
@@ -42,22 +44,21 @@ type Store struct {
 }
 
 func NewStore(uri, dbName string) (*Store, error) {
-	// Fail fast: a serverless function is killed at ~10s, so we must surface a
-	// readable error well before that rather than blocking on retries.
-	cx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-	defer cancel()
 	opts := options.Client().ApplyURI(uri).
-		SetServerSelectionTimeout(4 * time.Second).
-		SetConnectTimeout(4 * time.Second)
-	client, err := mongo.Connect(cx, opts)
+		SetServerSelectionTimeout(5 * time.Second).
+		SetConnectTimeout(5 * time.Second)
+	// Connect is non-blocking (it starts background monitoring) and does NOT
+	// verify the DB is reachable. We deliberately skip Ping here so the process
+	// always starts — a down database must not kill the server on startup, only
+	// make individual requests fail. Use Ping() for health checks.
+	client, err := mongo.Connect(context.Background(), opts)
 	if err != nil {
-		return nil, fmt.Errorf("mongo connect %s: %w", redactURI(uri), err)
-	}
-	if err := client.Ping(cx, nil); err != nil {
-		return nil, fmt.Errorf("mongo unreachable at %s: %w", redactURI(uri), err)
+		return nil, fmt.Errorf("mongo config %s: %w", redactURI(uri), err)
 	}
 	db := client.Database(dbName)
 	return &Store{
+		uri:      uri,
+		client:   client,
 		db:       db,
 		classes:  db.Collection("classifications"),
 		attracts: db.Collection("attractions"),
@@ -67,6 +68,16 @@ func NewStore(uri, dbName string) (*Store, error) {
 		bookings: db.Collection("bookings"),
 		tokens:   db.Collection("tokens"),
 	}, nil
+}
+
+// Ping verifies the database is actually reachable. Used by /health.
+func (s *Store) Ping() error {
+	cx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.client.Ping(cx, nil); err != nil {
+		return fmt.Errorf("mongo unreachable at %s: %w", redactURI(s.uri), err)
+	}
+	return nil
 }
 
 func ctx() (context.Context, context.CancelFunc) {
