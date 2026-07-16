@@ -30,6 +30,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	once.Do(func() { app, initErr = tm.New() })
+
+	// /health must answer even when the database is down — that is precisely
+	// when it is worth asking. It reports the DB state instead of failing.
+	if r.URL.Path == "/health" {
+		w.Header().Set("Content-Type", "application/json")
+		body := map[string]string{"status": "ok", "db": "connected"}
+		if initErr != nil {
+			body = map[string]string{"status": "degraded", "db": "disconnected", "error": initErr.Error()}
+		}
+		json.NewEncoder(w).Encode(body)
+		return
+	}
+
 	if initErr != nil {
 		writeErr(w, "startup: "+initErr.Error())
 		return
