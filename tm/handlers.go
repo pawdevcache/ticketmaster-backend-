@@ -2,6 +2,8 @@ package tm
 
 import (
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -9,6 +11,8 @@ import (
 )
 
 type Server struct{ store *Store }
+
+const maxBodyBytes = 1 << 20 // 1 MiB cap on request bodies
 
 // --- helpers ---
 
@@ -22,13 +26,24 @@ func fail(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-func readJSON(r *http.Request, v any) error {
+// serverError logs the real cause but returns a generic message, so internal
+// database details are never exposed to clients.
+func serverError(w http.ResponseWriter, err error) {
+	log.Println("server error:", err)
+	fail(w, http.StatusInternalServerError, "internal server error")
+}
+
+func readJSON(w http.ResponseWriter, r *http.Request, v any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
 // paginate slices items and wraps them in a Discovery-style envelope.
 func paginate[T any](w http.ResponseWriter, key string, items []T, r *http.Request) {
 	size := atoiDefault(r.URL.Query().Get("size"), 20)
+	if size > 100 {
+		size = 100 // cap page size to avoid abusive large responses
+	}
 	page := atoiDefault(r.URL.Query().Get("page"), 0)
 	total := len(items)
 	start := page * size
@@ -74,7 +89,7 @@ func (s *Server) searchEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := s.store.Events(f)
 	if err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+		serverError(w, err)
 		return
 	}
 	paginate(w, "events", events, r)
@@ -91,12 +106,12 @@ func (s *Server) getEvent(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createEvent(w http.ResponseWriter, r *http.Request) {
 	var e Event
-	if readJSON(r, &e) != nil {
+	if readJSON(w, r, &e) != nil {
 		fail(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	if err := s.store.CreateEvent(&e); err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+		serverError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, e)
@@ -108,7 +123,7 @@ func (s *Server) searchVenues(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	venues, err := s.store.Venues(q.Get("keyword"), q.Get("city"))
 	if err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+		serverError(w, err)
 		return
 	}
 	paginate(w, "venues", venues, r)
@@ -125,12 +140,12 @@ func (s *Server) getVenue(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createVenue(w http.ResponseWriter, r *http.Request) {
 	var v Venue
-	if readJSON(r, &v) != nil {
+	if readJSON(w, r, &v) != nil {
 		fail(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	if err := s.store.CreateVenue(&v); err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+		serverError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, v)
@@ -141,7 +156,7 @@ func (s *Server) createVenue(w http.ResponseWriter, r *http.Request) {
 func (s *Server) searchAttractions(w http.ResponseWriter, r *http.Request) {
 	attractions, err := s.store.Attractions(r.URL.Query().Get("keyword"))
 	if err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+		serverError(w, err)
 		return
 	}
 	paginate(w, "attractions", attractions, r)
@@ -158,12 +173,12 @@ func (s *Server) getAttraction(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createAttraction(w http.ResponseWriter, r *http.Request) {
 	var a Attraction
-	if readJSON(r, &a) != nil {
+	if readJSON(w, r, &a) != nil {
 		fail(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	if err := s.store.CreateAttraction(&a); err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+		serverError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, a)
@@ -174,7 +189,7 @@ func (s *Server) createAttraction(w http.ResponseWriter, r *http.Request) {
 func (s *Server) searchClassifications(w http.ResponseWriter, r *http.Request) {
 	classes, err := s.store.Classifications()
 	if err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+		serverError(w, err)
 		return
 	}
 	paginate(w, "classifications", classes, r)
@@ -193,12 +208,16 @@ func (s *Server) getClassification(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	var u User
-	if readJSON(r, &u) != nil || u.Email == "" || u.Password == "" {
+	if readJSON(w, r, &u) != nil || u.Email == "" || u.Password == "" {
 		fail(w, http.StatusBadRequest, "name, email, password required")
 		return
 	}
 	if err := s.store.Register(&u); err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+		if errors.Is(err, ErrDuplicate) {
+			fail(w, http.StatusConflict, "email already registered")
+			return
+		}
+		serverError(w, err)
 		return
 	}
 	u.Password = "" // hide from response
@@ -207,7 +226,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var c struct{ Email, Password string }
-	if readJSON(r, &c) != nil {
+	if readJSON(w, r, &c) != nil {
 		fail(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -230,16 +249,21 @@ func (s *Server) createBooking(w http.ResponseWriter, r *http.Request) {
 		EventID  string `json:"eventId"`
 		Quantity int    `json:"quantity"`
 	}
-	if readJSON(r, &req) != nil {
+	if readJSON(w, r, &req) != nil {
 		fail(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	b, err := s.store.Book(u.ID, req.EventID, req.Quantity)
-	if err != nil {
-		fail(w, http.StatusConflict, err.Error())
-		return
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusCreated, b)
+	case errors.Is(err, ErrNotFound):
+		fail(w, http.StatusNotFound, "event not found")
+	case errors.Is(err, ErrSoldOut):
+		fail(w, http.StatusConflict, ErrSoldOut.Error())
+	default:
+		serverError(w, err) // unexpected DB error — don't leak internals
 	}
-	writeJSON(w, http.StatusCreated, b)
 }
 
 func (s *Server) listBookings(w http.ResponseWriter, r *http.Request) {
@@ -249,7 +273,7 @@ func (s *Server) listBookings(w http.ResponseWriter, r *http.Request) {
 	}
 	bookings, err := s.store.UserBookings(u.ID)
 	if err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+		serverError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, bookings)

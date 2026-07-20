@@ -1,6 +1,9 @@
 package tm
 
-import "net/http"
+import (
+	"log"
+	"net/http"
+)
 
 // New builds the fully-wired API handler. Used by both the local dev server
 // (main.go) and the Vercel serverless entrypoint (api/index.go).
@@ -9,6 +12,11 @@ func New() (http.Handler, error) {
 	store, err := NewStore(env("MONGO_URI", "mongodb://localhost:27017"), env("DB_NAME", "ticketmaster"))
 	if err != nil {
 		return nil, err
+	}
+	// Best-effort: enforce unique email + token expiry. Don't fail startup if
+	// the DB is briefly unreachable — health will surface that separately.
+	if err := store.EnsureIndexes(); err != nil {
+		log.Println("warning: could not create indexes:", err)
 	}
 	s := &Server{store: store}
 

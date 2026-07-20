@@ -11,13 +11,19 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var (
 	ErrNotFound     = errors.New("not found")
 	ErrSoldOut      = errors.New("not enough tickets available")
 	ErrUnauthorized = errors.New("unauthorized")
+	ErrDuplicate    = errors.New("email already registered")
 )
+
+// tokenTTL is how long a login token stays valid before Mongo's TTL index
+// deletes it (enforced by EnsureIndexes).
+const tokenTTL = 24 * time.Hour
 
 // redactURI strips credentials so a connection string is safe to log or return.
 func redactURI(uri string) string {
@@ -214,17 +220,35 @@ func (s *Store) CreateEvent(e *Event) error {
 // --- Users & auth ---
 
 func (s *Store) Register(u *User) error {
+	// Store only a bcrypt hash, never the plaintext password.
+	hash, err := bcrypt.GenerateFromPassword([]byte(u.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
 	u.ID = newID()
-	return insert(s.users, u)
+	u.Password = string(hash)
+	if err := insert(s.users, u); err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return ErrDuplicate // unique index on email (see EnsureIndexes)
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Store) Login(email, password string) (string, error) {
-	u, err := findOne[User](s.users, bson.D{{Key: "email", Value: email}, {Key: "password", Value: password}})
+	u, err := findOne[User](s.users, bson.D{{Key: "email", Value: email}})
 	if err != nil {
 		return "", ErrUnauthorized
 	}
+	// Constant-time hash comparison; wrong password and unknown user look alike.
+	if bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)) != nil {
+		return "", ErrUnauthorized
+	}
 	tok := newID()
-	return tok, insert(s.tokens, bson.D{{Key: "_id", Value: tok}, {Key: "userId", Value: u.ID}})
+	return tok, insert(s.tokens, bson.D{
+		{Key: "_id", Value: tok}, {Key: "userId", Value: u.ID}, {Key: "createdAt", Value: time.Now()},
+	})
 }
 
 func (s *Store) UserByToken(tok string) (*User, error) {
@@ -238,6 +262,24 @@ func (s *Store) UserByToken(tok string) (*User, error) {
 		return nil, ErrUnauthorized
 	}
 	return s.userByID(t.UserID)
+}
+
+// EnsureIndexes enforces a unique email and auto-expiring login tokens.
+// Best-effort: called once at startup.
+func (s *Store) EnsureIndexes() error {
+	cx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := s.users.Indexes().CreateOne(cx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "email", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	}); err != nil {
+		return err
+	}
+	_, err := s.tokens.Indexes().CreateOne(cx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "createdAt", Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(int32(tokenTTL.Seconds())),
+	})
+	return err
 }
 
 func (s *Store) userByID(id string) (*User, error) {
