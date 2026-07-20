@@ -21,21 +21,15 @@ func New() (http.Handler, error) {
 		writeJSON(w, 200, map[string]string{"status": "ok", "db": "connected"})
 	})
 
-	// Root: {$} matches only the exact "/" path, so real unknown routes still 404.
+	// Root: a human-friendly HTML status page (opening the URL in a browser now
+	// shows a real page instead of raw JSON). {$} matches only the exact "/".
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, 200, map[string]any{
-			"service": "Ticketmaster API",
-			"status":  "running",
-			"endpoints": []string{
-				"GET /health",
-				"GET /discovery/v2/events", "GET /discovery/v2/events/{id}", "POST /discovery/v2/events",
-				"GET /discovery/v2/venues", "GET /discovery/v2/venues/{id}", "POST /discovery/v2/venues",
-				"GET /discovery/v2/attractions", "GET /discovery/v2/attractions/{id}", "POST /discovery/v2/attractions",
-				"GET /discovery/v2/classifications", "GET /discovery/v2/classifications/{id}",
-				"POST /api/register", "POST /api/login",
-				"POST /api/bookings", "GET /api/bookings", "GET /api/bookings/{id}", "DELETE /api/bookings/{id}",
-			},
-		})
+		db := "connected"
+		if store.Ping() != nil {
+			db = "disconnected"
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(landingHTML(db)))
 	})
 
 	// Discovery API (read + admin create)
