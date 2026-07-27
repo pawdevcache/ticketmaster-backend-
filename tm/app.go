@@ -38,31 +38,51 @@ func New() (http.Handler, error) {
 		writeJSON(w, 200, map[string]any{
 			"service": "Ticketmaster API",
 			"status":  "running",
-			"endpoints": []string{
-				"GET /health",
-				"GET /discovery/v2/events", "GET /discovery/v2/events/{id}", "POST /discovery/v2/events",
-				"GET /discovery/v2/venues", "GET /discovery/v2/venues/{id}", "POST /discovery/v2/venues",
-				"GET /discovery/v2/attractions", "GET /discovery/v2/attractions/{id}", "POST /discovery/v2/attractions",
-				"GET /discovery/v2/classifications", "GET /discovery/v2/classifications/{id}",
-				"POST /api/register", "POST /api/login",
-				"POST /api/admin/register", "POST /api/admin/login", "GET /api/admin/me",
-				"POST /api/bookings", "GET /api/bookings", "GET /api/bookings/{id}", "DELETE /api/bookings/{id}",
+			"endpoints": map[string][]string{
+				"public": {
+					"GET /health",
+					"GET /discovery/v2/{events|venues|attractions|classifications}",
+					"GET /discovery/v2/{events|venues|attractions|classifications}/{id}",
+					"POST /api/register", "POST /api/login",
+				},
+				"user": {
+					"POST /api/bookings", "GET /api/bookings",
+					"GET /api/bookings/{id}", "DELETE /api/bookings/{id}",
+				},
+				"admin": {
+					"POST /api/admin/register", "POST /api/admin/login", "GET /api/admin/me",
+					"POST /discovery/v2/{events|venues|attractions|classifications}",
+					"PUT|PATCH /discovery/v2/{events|venues|attractions|classifications}/{id}",
+					"DELETE /discovery/v2/{events|venues|attractions|classifications}/{id}",
+					"GET /api/admin/users", "GET /api/admin/users/{id}",
+					"PUT|PATCH /api/admin/users/{id}", "DELETE /api/admin/users/{id}",
+					"GET /api/admin/bookings", "GET /api/admin/bookings/{id}",
+					"POST /api/admin/bookings/{id}/cancel", "DELETE /api/admin/bookings/{id}",
+				},
 			},
 		})
 	})
 
-	// Discovery API (read + admin create)
-	mux.HandleFunc("GET /discovery/v2/events", s.searchEvents)
-	mux.HandleFunc("GET /discovery/v2/events/{id}", s.getEvent)
-	mux.HandleFunc("POST /discovery/v2/events", s.createEvent)
-	mux.HandleFunc("GET /discovery/v2/venues", s.searchVenues)
-	mux.HandleFunc("GET /discovery/v2/venues/{id}", s.getVenue)
-	mux.HandleFunc("POST /discovery/v2/venues", s.createVenue)
-	mux.HandleFunc("GET /discovery/v2/attractions", s.searchAttractions)
-	mux.HandleFunc("GET /discovery/v2/attractions/{id}", s.getAttraction)
-	mux.HandleFunc("POST /discovery/v2/attractions", s.createAttraction)
-	mux.HandleFunc("GET /discovery/v2/classifications", s.searchClassifications)
-	mux.HandleFunc("GET /discovery/v2/classifications/{id}", s.getClassification)
+	// Discovery API. Reads are public; every write requires an admin token.
+	// PUT and PATCH share a handler: both apply a partial update, so a body
+	// only needs the fields that actually change.
+	for _, res := range []struct {
+		path                             string
+		search, get, create, update, del http.HandlerFunc
+	}{
+		{"events", s.searchEvents, s.getEvent, s.createEvent, s.updateEvent, s.deleteEvent},
+		{"venues", s.searchVenues, s.getVenue, s.createVenue, s.updateVenue, s.deleteVenue},
+		{"attractions", s.searchAttractions, s.getAttraction, s.createAttraction, s.updateAttraction, s.deleteAttraction},
+		{"classifications", s.searchClassifications, s.getClassification, s.createClassification, s.updateClassification, s.deleteClassification},
+	} {
+		base := "/discovery/v2/" + res.path
+		mux.HandleFunc("GET "+base, res.search)
+		mux.HandleFunc("GET "+base+"/{id}", res.get)
+		mux.HandleFunc("POST "+base, res.create)
+		mux.HandleFunc("PUT "+base+"/{id}", res.update)
+		mux.HandleFunc("PATCH "+base+"/{id}", res.update)
+		mux.HandleFunc("DELETE "+base+"/{id}", res.del)
+	}
 
 	// Ticketing / commerce
 	mux.HandleFunc("POST /api/register", s.register)
@@ -73,6 +93,17 @@ func New() (http.Handler, error) {
 	mux.HandleFunc("POST /api/admin/register", s.adminRegister)
 	mux.HandleFunc("POST /api/admin/login", s.adminLogin)
 	mux.HandleFunc("GET /api/admin/me", s.adminMe)
+
+	// Admin management of accounts and of every user's bookings.
+	mux.HandleFunc("GET /api/admin/users", s.adminListUsers)
+	mux.HandleFunc("GET /api/admin/users/{id}", s.adminGetUser)
+	mux.HandleFunc("PUT /api/admin/users/{id}", s.adminUpdateUser)
+	mux.HandleFunc("PATCH /api/admin/users/{id}", s.adminUpdateUser)
+	mux.HandleFunc("DELETE /api/admin/users/{id}", s.adminDeleteUser)
+	mux.HandleFunc("GET /api/admin/bookings", s.adminListBookings)
+	mux.HandleFunc("GET /api/admin/bookings/{id}", s.adminGetBooking)
+	mux.HandleFunc("POST /api/admin/bookings/{id}/cancel", s.adminCancelBooking)
+	mux.HandleFunc("DELETE /api/admin/bookings/{id}", s.adminDeleteBooking)
 
 	mux.HandleFunc("POST /api/bookings", s.createBooking)
 	mux.HandleFunc("GET /api/bookings", s.listBookings)

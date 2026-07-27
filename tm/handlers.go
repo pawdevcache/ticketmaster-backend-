@@ -96,6 +96,21 @@ func (s *Server) adminAuth(w http.ResponseWriter, r *http.Request) *User {
 	return u
 }
 
+// deleted writes the standard response for a delete: 204 on success, or the
+// mapped error. inUse is the message for a record other records still point at.
+func (s *Server) deleted(w http.ResponseWriter, err error, what, inUse string) {
+	switch {
+	case err == nil:
+		w.WriteHeader(http.StatusNoContent)
+	case errors.Is(err, ErrNotFound):
+		fail(w, http.StatusNotFound, what+" not found")
+	case errors.Is(err, ErrInUse):
+		fail(w, http.StatusConflict, inUse)
+	default:
+		serverError(w, err)
+	}
+}
+
 // --- discovery: events ---
 
 func (s *Server) searchEvents(w http.ResponseWriter, r *http.Request) {
@@ -137,6 +152,43 @@ func (s *Server) createEvent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, e)
 }
 
+// updateEvent applies a partial update: the body is decoded over the stored
+// event, so omitted fields keep their current values. ticketsSold belongs to
+// the booking flow and is never taken from the request.
+func (s *Server) updateEvent(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	e, err := s.store.Event(r.PathValue("id"))
+	if err != nil {
+		fail(w, http.StatusNotFound, "event not found")
+		return
+	}
+	id, sold := e.ID, e.TicketsSold
+	if readJSON(w, r, e) != nil {
+		fail(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	e.ID, e.TicketsSold = id, sold
+	if e.TicketsTotal < sold {
+		fail(w, http.StatusBadRequest, "ticketsTotal is below the number already sold")
+		return
+	}
+	if err := s.store.UpdateEvent(e); err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, e)
+}
+
+func (s *Server) deleteEvent(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	s.deleted(w, s.store.DeleteEvent(r.PathValue("id")), "event",
+		"event has confirmed bookings: cancel those first")
+}
+
 // --- discovery: venues ---
 
 func (s *Server) searchVenues(w http.ResponseWriter, r *http.Request) {
@@ -172,6 +224,36 @@ func (s *Server) createVenue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, v)
+}
+
+func (s *Server) updateVenue(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	v, err := s.store.Venue(r.PathValue("id"))
+	if err != nil {
+		fail(w, http.StatusNotFound, "venue not found")
+		return
+	}
+	id := v.ID
+	if readJSON(w, r, v) != nil {
+		fail(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	v.ID = id
+	if err := s.store.UpdateVenue(v); err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) deleteVenue(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	s.deleted(w, s.store.DeleteVenue(r.PathValue("id")), "venue",
+		"venue still hosts events: move or delete those first")
 }
 
 // --- discovery: attractions ---
@@ -210,6 +292,36 @@ func (s *Server) createAttraction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, a)
 }
 
+func (s *Server) updateAttraction(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	a, err := s.store.Attraction(r.PathValue("id"))
+	if err != nil {
+		fail(w, http.StatusNotFound, "attraction not found")
+		return
+	}
+	id := a.ID
+	if readJSON(w, r, a) != nil {
+		fail(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	a.ID = id
+	if err := s.store.UpdateAttraction(a); err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
+func (s *Server) deleteAttraction(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	s.deleted(w, s.store.DeleteAttraction(r.PathValue("id")), "attraction",
+		"attraction is still listed on events: remove it from those first")
+}
+
 // --- discovery: classifications ---
 
 func (s *Server) searchClassifications(w http.ResponseWriter, r *http.Request) {
@@ -228,6 +340,52 @@ func (s *Server) getClassification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
+}
+
+func (s *Server) createClassification(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	var c Classification
+	if readJSON(w, r, &c) != nil || c.Segment == "" {
+		fail(w, http.StatusBadRequest, "segment required")
+		return
+	}
+	if err := s.store.CreateClassification(&c); err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, c)
+}
+
+func (s *Server) updateClassification(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	c, err := s.store.Classification(r.PathValue("id"))
+	if err != nil {
+		fail(w, http.StatusNotFound, "classification not found")
+		return
+	}
+	id := c.ID
+	if readJSON(w, r, c) != nil {
+		fail(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	c.ID = id
+	if err := s.store.UpdateClassification(c); err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+func (s *Server) deleteClassification(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	s.deleted(w, s.store.DeleteClassification(r.PathValue("id")), "classification",
+		"classification is still used by events or attractions: reassign those first")
 }
 
 // --- users & auth ---
@@ -308,6 +466,162 @@ func (s *Server) doLogin(w http.ResponseWriter, r *http.Request, adminOnly bool)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"token": tok, "user": u})
+}
+
+// --- admin: user accounts ---
+
+// scrub blanks password hashes before users go out in a response.
+func scrub(users []*User) []*User {
+	for _, u := range users {
+		u.Password = ""
+	}
+	return users
+}
+
+func (s *Server) adminListUsers(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	q := r.URL.Query()
+	users, err := s.store.Users(q.Get("keyword"), q.Get("role"))
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	paginate(w, "users", scrub(users), r)
+}
+
+func (s *Server) adminGetUser(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	u, err := s.store.User(r.PathValue("id"))
+	if err != nil {
+		fail(w, http.StatusNotFound, "user not found")
+		return
+	}
+	u.Password = ""
+	writeJSON(w, http.StatusOK, u)
+}
+
+// adminUpdateUser edits any account, including its role. A password in the body
+// is plaintext and gets hashed; leaving it out keeps the existing one.
+func (s *Server) adminUpdateUser(w http.ResponseWriter, r *http.Request) {
+	admin := s.adminAuth(w, r)
+	if admin == nil {
+		return
+	}
+	u, err := s.store.User(r.PathValue("id"))
+	if err != nil {
+		fail(w, http.StatusNotFound, "user not found")
+		return
+	}
+	id, hash := u.ID, u.Password
+	if readJSON(w, r, u) != nil {
+		fail(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	u.ID = id
+	if u.Email == "" {
+		fail(w, http.StatusBadRequest, "email required")
+		return
+	}
+	// The stored value is a bcrypt hash, so anything different came from the
+	// request body as plaintext and needs hashing.
+	if u.Password != "" && u.Password != hash {
+		if u.Password, err = HashPassword(u.Password); err != nil {
+			serverError(w, err)
+			return
+		}
+	} else {
+		u.Password = hash
+	}
+	if u.Role != RoleAdmin {
+		u.Role = RoleUser
+	}
+	// Guard against an admin locking themselves out of the admin routes.
+	if u.ID == admin.ID && !u.IsAdmin() {
+		fail(w, http.StatusBadRequest, "you cannot remove your own admin role")
+		return
+	}
+	if err := s.store.UpdateUser(u); err != nil {
+		if errors.Is(err, ErrDuplicate) {
+			fail(w, http.StatusConflict, "email already registered")
+			return
+		}
+		serverError(w, err)
+		return
+	}
+	u.Password = ""
+	writeJSON(w, http.StatusOK, u)
+}
+
+func (s *Server) adminDeleteUser(w http.ResponseWriter, r *http.Request) {
+	admin := s.adminAuth(w, r)
+	if admin == nil {
+		return
+	}
+	if r.PathValue("id") == admin.ID {
+		fail(w, http.StatusBadRequest, "you cannot delete your own account")
+		return
+	}
+	s.deleted(w, s.store.DeleteUser(r.PathValue("id")), "user",
+		"user holds confirmed bookings: cancel those first")
+}
+
+// --- admin: bookings across all users ---
+
+func (s *Server) adminListBookings(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	q := r.URL.Query()
+	bookings, err := s.store.AllBookings(BookingFilter{
+		UserID: q.Get("userId"), EventID: q.Get("eventId"), Status: q.Get("status"),
+	})
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	paginate(w, "bookings", bookings, r)
+}
+
+func (s *Server) adminGetBooking(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	b, err := s.store.BookingByID(r.PathValue("id"))
+	if err != nil {
+		fail(w, http.StatusNotFound, "booking not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, b)
+}
+
+// adminCancelBooking cancels anyone's booking and returns the tickets to the
+// event. Deleting instead would lose the audit trail, so cancel is a separate
+// action from DELETE.
+func (s *Server) adminCancelBooking(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	b, err := s.store.AdminCancelBooking(r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			fail(w, http.StatusNotFound, "booking not found")
+			return
+		}
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, b)
+}
+
+func (s *Server) adminDeleteBooking(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
+	s.deleted(w, s.store.DeleteBooking(r.PathValue("id")), "booking", "")
 }
 
 // adminMe returns the signed-in admin, letting a client verify a stored token.

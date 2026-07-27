@@ -19,6 +19,9 @@ var (
 	ErrSoldOut      = errors.New("not enough tickets available")
 	ErrUnauthorized = errors.New("unauthorized")
 	ErrDuplicate    = errors.New("email already registered")
+	// ErrInUse blocks deleting a record other records still point at, so an
+	// admin can't silently orphan events, bookings or attractions.
+	ErrInUse = errors.New("still referenced by other records")
 )
 
 // tokenTTL is how long a login token stays valid before Mongo's TTL index
@@ -129,6 +132,44 @@ func insert(c *mongo.Collection, doc any) error {
 	return err
 }
 
+// replace overwrites the document with the given id. Callers build the new
+// document by decoding the request over the stored one, so fields the client
+// left out keep their current values.
+func replace(c *mongo.Collection, id string, doc any) error {
+	cx, cancel := ctx()
+	defer cancel()
+	res, err := c.ReplaceOne(cx, bson.D{{Key: "_id", Value: id}}, doc)
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func remove(c *mongo.Collection, id string) error {
+	cx, cancel := ctx()
+	defer cancel()
+	res, err := c.DeleteOne(cx, bson.D{{Key: "_id", Value: id}})
+	if err != nil {
+		return err
+	}
+	if res.DeletedCount == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// anyMatch reports whether at least one document matches — used by the delete
+// guards to detect records that are still referenced.
+func anyMatch(c *mongo.Collection, filter bson.D) (bool, error) {
+	cx, cancel := ctx()
+	defer cancel()
+	n, err := c.CountDocuments(cx, filter, options.Count().SetLimit(1))
+	return n > 0, err
+}
+
 // --- Classifications ---
 
 func (s *Store) Classifications() ([]*Classification, error) {
@@ -136,6 +177,28 @@ func (s *Store) Classifications() ([]*Classification, error) {
 }
 func (s *Store) Classification(id string) (*Classification, error) {
 	return findOne[Classification](s.classes, bson.D{{Key: "_id", Value: id}})
+}
+func (s *Store) CreateClassification(c *Classification) error {
+	c.ID = newID()
+	return insert(s.classes, c)
+}
+func (s *Store) UpdateClassification(c *Classification) error {
+	return replace(s.classes, c.ID, c)
+}
+
+// DeleteClassification refuses while events or attractions still classify
+// themselves under it.
+func (s *Store) DeleteClassification(id string) error {
+	for _, c := range []*mongo.Collection{s.events, s.attracts} {
+		used, err := anyMatch(c, bson.D{{Key: "classificationId", Value: id}})
+		if err != nil {
+			return err
+		}
+		if used {
+			return ErrInUse
+		}
+	}
+	return remove(s.classes, id)
 }
 
 // --- Attractions ---
@@ -153,6 +216,21 @@ func (s *Store) Attraction(id string) (*Attraction, error) {
 func (s *Store) CreateAttraction(a *Attraction) error {
 	a.ID = newID()
 	return insert(s.attracts, a)
+}
+func (s *Store) UpdateAttraction(a *Attraction) error {
+	return replace(s.attracts, a.ID, a)
+}
+
+// DeleteAttraction refuses while any event still lists it in attractionIds.
+func (s *Store) DeleteAttraction(id string) error {
+	used, err := anyMatch(s.events, bson.D{{Key: "attractionIds", Value: id}})
+	if err != nil {
+		return err
+	}
+	if used {
+		return ErrInUse
+	}
+	return remove(s.attracts, id)
 }
 
 // --- Venues ---
@@ -173,6 +251,21 @@ func (s *Store) Venue(id string) (*Venue, error) {
 func (s *Store) CreateVenue(v *Venue) error {
 	v.ID = newID()
 	return insert(s.venues, v)
+}
+func (s *Store) UpdateVenue(v *Venue) error {
+	return replace(s.venues, v.ID, v)
+}
+
+// DeleteVenue refuses while any event is still scheduled there.
+func (s *Store) DeleteVenue(id string) error {
+	used, err := anyMatch(s.events, bson.D{{Key: "venueId", Value: id}})
+	if err != nil {
+		return err
+	}
+	if used {
+		return ErrInUse
+	}
+	return remove(s.venues, id)
 }
 
 // --- Events ---
@@ -215,6 +308,24 @@ func (s *Store) CreateEvent(e *Event) error {
 		e.Status = "onsale"
 	}
 	return insert(s.events, e)
+}
+func (s *Store) UpdateEvent(e *Event) error {
+	return replace(s.events, e.ID, e)
+}
+
+// DeleteEvent refuses while confirmed bookings exist — cancel them first, so
+// nobody loses a ticket they paid for. Cancelled bookings don't block it.
+func (s *Store) DeleteEvent(id string) error {
+	booked, err := anyMatch(s.bookings, bson.D{
+		{Key: "eventId", Value: id}, {Key: "status", Value: "confirmed"},
+	})
+	if err != nil {
+		return err
+	}
+	if booked {
+		return ErrInUse
+	}
+	return remove(s.events, id)
 }
 
 // --- Users & auth ---
@@ -326,6 +437,63 @@ func (s *Store) userByID(id string) (*User, error) {
 	return findOne[User](s.users, bson.D{{Key: "_id", Value: id}})
 }
 
+// --- user administration ---
+
+// HashPassword produces the stored form of a password. Exported so handlers
+// can hash a replacement password during an update.
+func HashPassword(pw string) (string, error) {
+	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	return string(h), err
+}
+
+// Users lists accounts, optionally filtered by name/email substring and role.
+func (s *Store) Users(keyword, role string) ([]*User, error) {
+	f := bson.D{}
+	if keyword != "" {
+		f = append(f, bson.E{Key: "$or", Value: bson.A{
+			bson.D{like("name", keyword)}, bson.D{like("email", keyword)},
+		}})
+	}
+	if role != "" {
+		f = append(f, bson.E{Key: "role", Value: role})
+	}
+	return findAll[User](s.users, f)
+}
+
+func (s *Store) User(id string) (*User, error) { return s.userByID(id) }
+
+// UpdateUser expects u.Password to already hold a bcrypt hash.
+func (s *Store) UpdateUser(u *User) error {
+	if err := replace(s.users, u.ID, u); err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return ErrDuplicate
+		}
+		return err
+	}
+	return nil
+}
+
+// DeleteUser removes an account and revokes its login tokens. It refuses while
+// the user holds confirmed bookings, so ticket holders can't vanish silently.
+func (s *Store) DeleteUser(id string) error {
+	booked, err := anyMatch(s.bookings, bson.D{
+		{Key: "userId", Value: id}, {Key: "status", Value: "confirmed"},
+	})
+	if err != nil {
+		return err
+	}
+	if booked {
+		return ErrInUse
+	}
+	if err := remove(s.users, id); err != nil {
+		return err
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	_, err = s.tokens.DeleteMany(cx, bson.D{{Key: "userId", Value: id}})
+	return err
+}
+
 // --- Bookings ---
 
 func (s *Store) Book(userID, eventID string, qty int) (*Booking, error) {
@@ -375,12 +543,79 @@ func (s *Store) CancelBooking(id, userID string) (*Booking, error) {
 	if err != nil {
 		return nil, err
 	}
+	return s.cancel(b)
+}
+
+// cancel marks a booking cancelled and returns its tickets to the event. It is
+// a no-op on an already-cancelled booking, so retries stay safe.
+func (s *Store) cancel(b *Booking) (*Booking, error) {
+	if b.Status != "confirmed" {
+		return b, nil
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	if _, err := s.bookings.UpdateByID(cx, b.ID,
+		bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "cancelled"}}}}); err != nil {
+		return nil, err
+	}
+	if err := s.releaseTickets(cx, b); err != nil {
+		return nil, err
+	}
+	b.Status = "cancelled"
+	return b, nil
+}
+
+// releaseTickets hands a booking's seats back to its event.
+func (s *Store) releaseTickets(cx context.Context, b *Booking) error {
+	_, err := s.events.UpdateByID(cx, b.EventID,
+		bson.D{{Key: "$inc", Value: bson.D{{Key: "ticketsSold", Value: -b.Quantity}}}})
+	return err
+}
+
+// --- booking administration (no per-user scoping) ---
+
+type BookingFilter struct{ UserID, EventID, Status string }
+
+func (s *Store) AllBookings(f BookingFilter) ([]*Booking, error) {
+	q := bson.D{}
+	if f.UserID != "" {
+		q = append(q, bson.E{Key: "userId", Value: f.UserID})
+	}
+	if f.EventID != "" {
+		q = append(q, bson.E{Key: "eventId", Value: f.EventID})
+	}
+	if f.Status != "" {
+		q = append(q, bson.E{Key: "status", Value: f.Status})
+	}
+	return findAll[Booking](s.bookings, q)
+}
+
+func (s *Store) BookingByID(id string) (*Booking, error) {
+	return findOne[Booking](s.bookings, bson.D{{Key: "_id", Value: id}})
+}
+
+// AdminCancelBooking cancels any booking regardless of who owns it.
+func (s *Store) AdminCancelBooking(id string) (*Booking, error) {
+	b, err := s.BookingByID(id)
+	if err != nil {
+		return nil, err
+	}
+	return s.cancel(b)
+}
+
+// DeleteBooking erases a booking outright. A confirmed one releases its
+// tickets first, so deleting never leaves an event overcounted.
+func (s *Store) DeleteBooking(id string) error {
+	b, err := s.BookingByID(id)
+	if err != nil {
+		return err
+	}
 	if b.Status == "confirmed" {
 		cx, cancel := ctx()
 		defer cancel()
-		s.bookings.UpdateByID(cx, id, bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "cancelled"}}}})
-		s.events.UpdateByID(cx, b.EventID, bson.D{{Key: "$inc", Value: bson.D{{Key: "ticketsSold", Value: -b.Quantity}}}})
-		b.Status = "cancelled"
+		if err := s.releaseTickets(cx, b); err != nil {
+			return err
+		}
 	}
-	return b, nil
+	return remove(s.bookings, id)
 }
