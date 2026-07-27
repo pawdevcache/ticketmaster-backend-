@@ -18,6 +18,10 @@ func New() (http.Handler, error) {
 	if err := store.EnsureIndexes(); err != nil {
 		log.Println("warning: could not create indexes:", err)
 	}
+	// Same deal for the optional bootstrap admin: log and carry on.
+	if err := store.EnsureAdmin(env("ADMIN_NAME", "Admin"), env("ADMIN_EMAIL", ""), env("ADMIN_PASSWORD", "")); err != nil {
+		log.Println("warning: could not seed admin user:", err)
+	}
 	s := &Server{store: store}
 
 	mux := http.NewServeMux()
@@ -41,6 +45,7 @@ func New() (http.Handler, error) {
 				"GET /discovery/v2/attractions", "GET /discovery/v2/attractions/{id}", "POST /discovery/v2/attractions",
 				"GET /discovery/v2/classifications", "GET /discovery/v2/classifications/{id}",
 				"POST /api/register", "POST /api/login",
+				"POST /api/admin/register", "POST /api/admin/login", "GET /api/admin/me",
 				"POST /api/bookings", "GET /api/bookings", "GET /api/bookings/{id}", "DELETE /api/bookings/{id}",
 			},
 		})
@@ -62,6 +67,13 @@ func New() (http.Handler, error) {
 	// Ticketing / commerce
 	mux.HandleFunc("POST /api/register", s.register)
 	mux.HandleFunc("POST /api/login", s.login)
+
+	// Admin accounts. Registration needs ADMIN_REGISTRATION_KEY; the resulting token
+	// is what the POST /discovery/v2/* create routes require.
+	mux.HandleFunc("POST /api/admin/register", s.adminRegister)
+	mux.HandleFunc("POST /api/admin/login", s.adminLogin)
+	mux.HandleFunc("GET /api/admin/me", s.adminMe)
+
 	mux.HandleFunc("POST /api/bookings", s.createBooking)
 	mux.HandleFunc("GET /api/bookings", s.listBookings)
 	mux.HandleFunc("GET /api/bookings/{id}", s.getBooking)

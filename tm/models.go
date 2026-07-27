@@ -41,12 +41,24 @@ type Event struct {
 	Title            string    `json:"title"`
 }
 
+// Roles. Anything that isn't RoleAdmin is treated as an ordinary user, so
+// documents written before roles existed keep working.
+const (
+	RoleUser  = "user"
+	RoleAdmin = "admin"
+)
+
 type User struct {
-	ID       string `json:"id" bson:"_id"`
-	Name     string `json:"name" bson:"name"`
-	Email    string `json:"email" bson:"email"`
+	ID    string `json:"id" bson:"_id"`
+	Name  string `json:"name" bson:"name"`
+	Email string `json:"email" bson:"email"`
+	// Role is set by the server from the endpoint used to register, never
+	// from the request body — otherwise anyone could self-promote.
+	Role     string `json:"role" bson:"role"`
 	Password string `json:"password,omitempty" bson:"password"`
 }
+
+func (u *User) IsAdmin() bool { return u.Role == RoleAdmin }
 
 type Booking struct {
 	ID        string    `json:"id" bson:"_id"`

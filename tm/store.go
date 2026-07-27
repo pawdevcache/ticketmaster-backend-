@@ -227,6 +227,9 @@ func (s *Store) Register(u *User) error {
 	}
 	u.ID = newID()
 	u.Password = string(hash)
+	if u.Role != RoleAdmin {
+		u.Role = RoleUser
+	}
 	if err := insert(s.users, u); err != nil {
 		if mongo.IsDuplicateKeyError(err) {
 			return ErrDuplicate // unique index on email (see EnsureIndexes)
@@ -236,19 +239,25 @@ func (s *Store) Register(u *User) error {
 	return nil
 }
 
-func (s *Store) Login(email, password string) (string, error) {
+// Login verifies credentials and issues a token. The authenticated user is
+// returned as well so callers can check the role before handing the token out.
+func (s *Store) Login(email, password string) (string, *User, error) {
 	u, err := findOne[User](s.users, bson.D{{Key: "email", Value: email}})
 	if err != nil {
-		return "", ErrUnauthorized
+		return "", nil, ErrUnauthorized
 	}
 	// Constant-time hash comparison; wrong password and unknown user look alike.
 	if bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)) != nil {
-		return "", ErrUnauthorized
+		return "", nil, ErrUnauthorized
 	}
 	tok := newID()
-	return tok, insert(s.tokens, bson.D{
+	if err := insert(s.tokens, bson.D{
 		{Key: "_id", Value: tok}, {Key: "userId", Value: u.ID}, {Key: "createdAt", Value: time.Now()},
-	})
+	}); err != nil {
+		return "", nil, err
+	}
+	u.Password = ""
+	return tok, u, nil
 }
 
 func (s *Store) UserByToken(tok string) (*User, error) {
@@ -280,6 +289,37 @@ func (s *Store) EnsureIndexes() error {
 		Options: options.Index().SetExpireAfterSeconds(int32(tokenTTL.Seconds())),
 	})
 	return err
+}
+
+// EnsureAdmin seeds a bootstrap admin so there is someone to sign in as before
+// any admin exists. It creates the account when the email is unknown, and only
+// promotes the role when it already exists — an existing password is never
+// overwritten, so rotating the env var can't hijack a live account.
+func (s *Store) EnsureAdmin(name, email, password string) error {
+	if email == "" || password == "" {
+		return nil // seeding not configured
+	}
+	u, err := findOne[User](s.users, bson.D{{Key: "email", Value: email}})
+	if err == nil {
+		if u.IsAdmin() {
+			return nil
+		}
+		cx, cancel := ctx()
+		defer cancel()
+		_, err = s.users.UpdateByID(cx, u.ID, bson.D{{Key: "$set", Value: bson.D{{Key: "role", Value: RoleAdmin}}}})
+		return err
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if name == "" {
+		name = "Admin"
+	}
+	admin := &User{Name: name, Email: email, Password: password, Role: RoleAdmin}
+	if err := s.Register(admin); err != nil && !errors.Is(err, ErrDuplicate) {
+		return err // a duplicate means a concurrent start won the race — fine
+	}
+	return nil
 }
 
 func (s *Store) userByID(id string) (*User, error) {

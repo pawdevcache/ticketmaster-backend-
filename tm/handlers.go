@@ -1,8 +1,11 @@
 package tm
 
 import (
+	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -79,6 +82,20 @@ func (s *Server) auth(w http.ResponseWriter, r *http.Request) *User {
 	return u
 }
 
+// adminAuth resolves the bearer token and requires an admin account, or writes
+// 401/403 and returns nil.
+func (s *Server) adminAuth(w http.ResponseWriter, r *http.Request) *User {
+	u := s.auth(w, r)
+	if u == nil {
+		return nil
+	}
+	if !u.IsAdmin() {
+		fail(w, http.StatusForbidden, "admin access required")
+		return nil
+	}
+	return u
+}
+
 // --- discovery: events ---
 
 func (s *Server) searchEvents(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +122,9 @@ func (s *Server) getEvent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createEvent(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
 	var e Event
 	if readJSON(w, r, &e) != nil {
 		fail(w, http.StatusBadRequest, "invalid body")
@@ -139,6 +159,9 @@ func (s *Server) getVenue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createVenue(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
 	var v Venue
 	if readJSON(w, r, &v) != nil {
 		fail(w, http.StatusBadRequest, "invalid body")
@@ -172,6 +195,9 @@ func (s *Server) getAttraction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createAttraction(w http.ResponseWriter, r *http.Request) {
+	if s.adminAuth(w, r) == nil {
+		return
+	}
 	var a Attraction
 	if readJSON(w, r, &a) != nil {
 		fail(w, http.StatusBadRequest, "invalid body")
@@ -206,12 +232,51 @@ func (s *Server) getClassification(w http.ResponseWriter, r *http.Request) {
 
 // --- users & auth ---
 
-func (s *Server) register(w http.ResponseWriter, r *http.Request) {
+func (s *Server) register(w http.ResponseWriter, r *http.Request) { s.doRegister(w, r, RoleUser) }
+
+// adminRegister creates an admin account. Because an admin can create events,
+// venues and attractions, sign-up is gated behind ADMIN_REGISTRATION_KEY: the caller
+// must present it in the X-Admin-Key header (or "adminKey" in the body).
+// Registration is disabled outright while that variable is unset.
+func (s *Server) adminRegister(w http.ResponseWriter, r *http.Request) {
+	want := env("ADMIN_REGISTRATION_KEY", "")
+	if want == "" {
+		fail(w, http.StatusServiceUnavailable, "admin registration is disabled: set ADMIN_REGISTRATION_KEY")
+		return
+	}
+	got := r.Header.Get("X-Admin-Key")
+	if got == "" {
+		// Fall back to the body so clients that can't set headers still work.
+		// Read it from a copy — doRegister decodes the body again below.
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+		if err != nil {
+			fail(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		var k struct {
+			AdminKey string `json:"adminKey"`
+		}
+		json.Unmarshal(body, &k) // a malformed body is reported by doRegister
+		got = k.AdminKey
+		r.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		fail(w, http.StatusForbidden, "invalid admin key")
+		return
+	}
+	s.doRegister(w, r, RoleAdmin)
+}
+
+// doRegister creates an account with the given role. The role always comes from
+// the caller, never from the request body, so "role":"admin" in a payload to
+// POST /api/register is ignored.
+func (s *Server) doRegister(w http.ResponseWriter, r *http.Request, role string) {
 	var u User
-	if readJSON(w, r, &u) != nil || u.Email == "" || u.Password == "" {
+	if readJSON(w, r, &u) != nil || u.Name == "" || u.Email == "" || u.Password == "" {
 		fail(w, http.StatusBadRequest, "name, email, password required")
 		return
 	}
+	u.Role = role
 	if err := s.store.Register(&u); err != nil {
 		if errors.Is(err, ErrDuplicate) {
 			fail(w, http.StatusConflict, "email already registered")
@@ -224,18 +289,35 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, u)
 }
 
-func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+func (s *Server) login(w http.ResponseWriter, r *http.Request) { s.doLogin(w, r, false) }
+
+// adminLogin issues a token only for admin accounts. Ordinary users get the
+// same "invalid credentials" response as a wrong password, so the endpoint
+// doesn't reveal which emails belong to admins.
+func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) { s.doLogin(w, r, true) }
+
+func (s *Server) doLogin(w http.ResponseWriter, r *http.Request, adminOnly bool) {
 	var c struct{ Email, Password string }
 	if readJSON(w, r, &c) != nil {
 		fail(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	tok, err := s.store.Login(c.Email, c.Password)
-	if err != nil {
+	tok, u, err := s.store.Login(c.Email, c.Password)
+	if err != nil || (adminOnly && !u.IsAdmin()) {
 		fail(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
+	writeJSON(w, http.StatusOK, map[string]any{"token": tok, "user": u})
+}
+
+// adminMe returns the signed-in admin, letting a client verify a stored token.
+func (s *Server) adminMe(w http.ResponseWriter, r *http.Request) {
+	u := s.adminAuth(w, r)
+	if u == nil {
+		return
+	}
+	u.Password = ""
+	writeJSON(w, http.StatusOK, u)
 }
 
 // --- bookings ---
