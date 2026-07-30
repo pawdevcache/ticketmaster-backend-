@@ -43,7 +43,7 @@ func New() (http.Handler, error) {
 					"GET /health",
 					"GET /discovery/v2/{events|venues|attractions|classifications}",
 					"GET /discovery/v2/{events|venues|attractions|classifications}/{id}",
-					"POST /api/register", "POST /api/login",
+					"POST /api/register", "POST /api/login", "POST /api/reset-password",
 				},
 				"user": {
 					"POST /api/bookings", "GET /api/bookings",
@@ -87,6 +87,7 @@ func New() (http.Handler, error) {
 	// Ticketing / commerce
 	mux.HandleFunc("POST /api/register", s.register)
 	mux.HandleFunc("POST /api/login", s.login)
+	mux.HandleFunc("POST /api/reset-password", s.resetPassword)
 
 	// Admin accounts. Registration needs ADMIN_REGISTRATION_KEY; the resulting token
 	// is what the POST /discovery/v2/* create routes require.

@@ -449,6 +449,32 @@ func (s *Server) doRegister(w http.ResponseWriter, r *http.Request, role string)
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) { s.doLogin(w, r, false) }
 
+// resetPassword updates a user's password from their email address.
+//
+// DEMO ONLY: it confirms the email exists but does not prove ownership (no
+// emailed reset token), so it must not be relied on as-is in production. Admin
+// accounts are excluded.
+func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
+	var c struct {
+		Email       string `json:"email"`
+		NewPassword string `json:"newPassword"`
+	}
+	if readJSON(w, r, &c) != nil || c.Email == "" || len(c.NewPassword) < 6 {
+		fail(w, http.StatusBadRequest, "email and a new password of at least 6 characters are required")
+		return
+	}
+	switch err := s.store.ResetPassword(c.Email, c.NewPassword); {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "password updated"})
+	case errors.Is(err, ErrNotFound):
+		fail(w, http.StatusNotFound, "no account found with that email")
+	case errors.Is(err, ErrUnauthorized):
+		fail(w, http.StatusForbidden, "admin passwords can't be reset here")
+	default:
+		serverError(w, err)
+	}
+}
+
 // adminLogin issues a token only for admin accounts. Ordinary users get the
 // same "invalid credentials" response as a wrong password, so the endpoint
 // doesn't reveal which emails belong to admins.

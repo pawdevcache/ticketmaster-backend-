@@ -473,6 +473,29 @@ func (s *Store) UpdateUser(u *User) error {
 	return nil
 }
 
+// ResetPassword sets a new password for the account with the given email.
+// Admin accounts are refused (change those from the admin console).
+//
+// DEMO ONLY: this verifies the email exists but NOT that the caller owns it —
+// there is no emailed reset token. Do not use as-is in production.
+func (s *Store) ResetPassword(email, newPassword string) error {
+	u, err := findOne[User](s.users, bson.D{{Key: "email", Value: email}})
+	if err != nil {
+		return err // ErrNotFound
+	}
+	if u.IsAdmin() {
+		return ErrUnauthorized
+	}
+	hash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	_, err = s.users.UpdateByID(cx, u.ID, bson.D{{Key: "$set", Value: bson.D{{Key: "password", Value: hash}}}})
+	return err
+}
+
 // DeleteUser removes an account and revokes its login tokens. It refuses while
 // the user holds confirmed bookings, so ticket holders can't vanish silently.
 func (s *Store) DeleteUser(id string) error {
