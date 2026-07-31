@@ -2,6 +2,8 @@ package tm
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -28,6 +30,13 @@ var (
 // deletes it (enforced by EnsureIndexes).
 const tokenTTL = 24 * time.Hour
 
+// resetTTL is how long a password-reset token stays usable. Short on purpose:
+// a reset token is a temporary key to somebody's account.
+const resetTTL = time.Hour
+
+// minPasswordLen is the shortest password accepted when setting a new one.
+const minPasswordLen = 6
+
 // redactURI strips credentials so a connection string is safe to log or return.
 func redactURI(uri string) string {
 	scheme := strings.Index(uri, "://")
@@ -50,6 +59,7 @@ type Store struct {
 	users    *mongo.Collection
 	bookings *mongo.Collection
 	tokens   *mongo.Collection
+	resets   *mongo.Collection
 }
 
 func NewStore(uri, dbName string) (*Store, error) {
@@ -76,6 +86,7 @@ func NewStore(uri, dbName string) (*Store, error) {
 		users:    db.Collection("users"),
 		bookings: db.Collection("bookings"),
 		tokens:   db.Collection("tokens"),
+		resets:   db.Collection("passwordResets"),
 	}, nil
 }
 
@@ -94,6 +105,17 @@ func ctx() (context.Context, context.CancelFunc) {
 }
 
 func newID() string { return primitive.NewObjectID().Hex() }
+
+// newSecret returns an unguessable 256-bit token. Reset tokens must not be
+// predictable, so this uses crypto/rand rather than the ObjectID scheme that
+// newID uses for document ids (ObjectIDs embed a timestamp and a counter).
+func newSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
 
 // like builds a case-insensitive "contains" regex filter, or nil to skip.
 func like(field, value string) bson.E {
@@ -395,9 +417,15 @@ func (s *Store) EnsureIndexes() error {
 	}); err != nil {
 		return err
 	}
-	_, err := s.tokens.Indexes().CreateOne(cx, mongo.IndexModel{
+	if _, err := s.tokens.Indexes().CreateOne(cx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "createdAt", Value: 1}},
 		Options: options.Index().SetExpireAfterSeconds(int32(tokenTTL.Seconds())),
+	}); err != nil {
+		return err
+	}
+	_, err := s.resets.Indexes().CreateOne(cx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "createdAt", Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(int32(resetTTL.Seconds())),
 	})
 	return err
 }
@@ -473,17 +501,57 @@ func (s *Store) UpdateUser(u *User) error {
 	return nil
 }
 
-// ResetPassword sets a new password for the account with the given email.
-// Admin accounts are refused (change those from the admin console).
+// --- forgotten passwords ---
+
+// passwordReset is a single-use ticket proving the bearer asked for a reset.
+type passwordReset struct {
+	Token     string    `bson:"_id"`
+	UserID    string    `bson:"userId"`
+	CreatedAt time.Time `bson:"createdAt"`
+}
+
+// CreateReset issues a reset token for the account with the given email.
+// Admin accounts are refused: an admin password is changed from the admin
+// console, so a public endpoint can never be a route into one.
 //
-// DEMO ONLY: this verifies the email exists but NOT that the caller owns it —
-// there is no emailed reset token. Do not use as-is in production.
-func (s *Store) ResetPassword(email, newPassword string) error {
+// Callers must not tell the client which error came back — that would turn
+// this into a way to test which email addresses have accounts.
+func (s *Store) CreateReset(email string) (string, error) {
 	u, err := findOne[User](s.users, bson.D{{Key: "email", Value: email}})
 	if err != nil {
-		return err // ErrNotFound
+		return "", err // ErrNotFound
 	}
 	if u.IsAdmin() {
+		return "", ErrUnauthorized
+	}
+	tok, err := newSecret()
+	if err != nil {
+		return "", err
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	// One live token per account: asking again invalidates the earlier one.
+	if _, err := s.resets.DeleteMany(cx, bson.D{{Key: "userId", Value: u.ID}}); err != nil {
+		return "", err
+	}
+	_, err = s.resets.InsertOne(cx, passwordReset{Token: tok, UserID: u.ID, CreatedAt: time.Now()})
+	return tok, err
+}
+
+// ResetPassword consumes a reset token and sets the new password. The token
+// works once; any existing login sessions are revoked, so a reset also kicks
+// out whoever might already be signed in as that user.
+func (s *Store) ResetPassword(token, newPassword string) error {
+	if token == "" {
+		return ErrUnauthorized
+	}
+	pr, err := findOne[passwordReset](s.resets, bson.D{{Key: "_id", Value: token}})
+	if err != nil {
+		return ErrUnauthorized
+	}
+	// Mongo's TTL sweeper only runs about once a minute, so an expired token
+	// can still be present. Enforce the deadline here rather than trust it.
+	if time.Since(pr.CreatedAt) > resetTTL {
 		return ErrUnauthorized
 	}
 	hash, err := HashPassword(newPassword)
@@ -492,7 +560,14 @@ func (s *Store) ResetPassword(email, newPassword string) error {
 	}
 	cx, cancel := ctx()
 	defer cancel()
-	_, err = s.users.UpdateByID(cx, u.ID, bson.D{{Key: "$set", Value: bson.D{{Key: "password", Value: hash}}}})
+	if _, err := s.users.UpdateByID(cx, pr.UserID,
+		bson.D{{Key: "$set", Value: bson.D{{Key: "password", Value: hash}}}}); err != nil {
+		return err
+	}
+	if _, err := s.resets.DeleteOne(cx, bson.D{{Key: "_id", Value: token}}); err != nil {
+		return err
+	}
+	_, err = s.tokens.DeleteMany(cx, bson.D{{Key: "userId", Value: pr.UserID}})
 	return err
 }
 

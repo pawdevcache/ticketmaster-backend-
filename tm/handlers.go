@@ -449,27 +449,57 @@ func (s *Server) doRegister(w http.ResponseWriter, r *http.Request, role string)
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) { s.doLogin(w, r, false) }
 
-// resetPassword updates a user's password from their email address.
+// forgotPassword starts the reset flow for the "forgot password?" screen.
 //
-// DEMO ONLY: it confirms the email exists but does not prove ownership (no
-// emailed reset token), so it must not be relied on as-is in production. Admin
-// accounts are excluded.
-func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
+// It always answers 200 with the same message, whether or not the address has
+// an account, so the endpoint can't be used to discover who is registered.
+// There is no mail service wired up, so the token is written to the server log;
+// outside production it also comes back in the response to keep local testing
+// workable. See resetPassword for step two.
+func (s *Server) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	var c struct {
-		Email       string `json:"email"`
-		NewPassword string `json:"newPassword"`
+		Email string `json:"email"`
 	}
-	if readJSON(w, r, &c) != nil || c.Email == "" || len(c.NewPassword) < 6 {
-		fail(w, http.StatusBadRequest, "email and a new password of at least 6 characters are required")
+	if readJSON(w, r, &c) != nil || c.Email == "" {
+		fail(w, http.StatusBadRequest, "email required")
 		return
 	}
-	switch err := s.store.ResetPassword(c.Email, c.NewPassword); {
+	out := map[string]string{"status": "if that email has an account, a reset token has been issued"}
+	tok, err := s.store.CreateReset(c.Email)
+	switch {
 	case err == nil:
-		writeJSON(w, http.StatusOK, map[string]string{"status": "password updated"})
-	case errors.Is(err, ErrNotFound):
-		fail(w, http.StatusNotFound, "no account found with that email")
+		log.Printf("password reset token issued for %s (valid %s): %s", c.Email, resetTTL, tok)
+		if devMode() {
+			out["resetToken"] = tok
+			out["note"] = "resetToken is returned outside production only; set ENV=production to suppress it"
+		}
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrUnauthorized):
+		// Unknown address, or an admin account: reveal neither.
+	default:
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// resetPassword completes the flow: it trades a token from forgotPassword for
+// a new password. The token is single-use and expires; a successful reset also
+// signs out every existing session for that account.
+func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
+	var c struct {
+		Token       string `json:"token"`
+		NewPassword string `json:"newPassword"`
+	}
+	if readJSON(w, r, &c) != nil || c.Token == "" || len(c.NewPassword) < minPasswordLen {
+		fail(w, http.StatusBadRequest,
+			"token and a new password of at least "+strconv.Itoa(minPasswordLen)+" characters are required")
+		return
+	}
+	switch err := s.store.ResetPassword(c.Token, c.NewPassword); {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "password updated, please sign in again"})
 	case errors.Is(err, ErrUnauthorized):
-		fail(w, http.StatusForbidden, "admin passwords can't be reset here")
+		fail(w, http.StatusBadRequest, "reset token is invalid, already used, or expired")
 	default:
 		serverError(w, err)
 	}

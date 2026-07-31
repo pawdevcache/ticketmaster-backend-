@@ -43,7 +43,8 @@ func New() (http.Handler, error) {
 					"GET /health",
 					"GET /discovery/v2/{events|venues|attractions|classifications}",
 					"GET /discovery/v2/{events|venues|attractions|classifications}/{id}",
-					"POST /api/register", "POST /api/login", "POST /api/reset-password",
+					"POST /api/register", "POST /api/login",
+					"POST /api/forgot-password", "POST /api/reset-password",
 				},
 				"user": {
 					"POST /api/bookings", "GET /api/bookings",
@@ -87,6 +88,8 @@ func New() (http.Handler, error) {
 	// Ticketing / commerce
 	mux.HandleFunc("POST /api/register", s.register)
 	mux.HandleFunc("POST /api/login", s.login)
+	// Forgotten-password flow: request a token, then trade it for a new password.
+	mux.HandleFunc("POST /api/forgot-password", s.forgotPassword)
 	mux.HandleFunc("POST /api/reset-password", s.resetPassword)
 
 	// Admin accounts. Registration needs ADMIN_REGISTRATION_KEY; the resulting token

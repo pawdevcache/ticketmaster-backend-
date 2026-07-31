@@ -38,3 +38,15 @@ func env(key, def string) string {
 	}
 	return def
 }
+
+// devMode reports whether this is a local, non-production deployment. It fails
+// safe: only an explicitly development-ish ENV counts, so a deployment that
+// forgets to set ENV is treated as production and won't echo reset tokens in
+// API responses.
+func devMode() bool {
+	switch strings.ToLower(env("ENV", "production")) {
+	case "development", "dev", "local", "test":
+		return true
+	}
+	return false
+}

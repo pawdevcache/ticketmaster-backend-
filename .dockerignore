@@ -1,0 +1,17 @@
+# Secrets. The app reads configuration from the environment at runtime, so a
+# .env must never be copied into an image layer — anyone who pulls the image
+# can read it back out, even if a later layer deletes it.
+.env
+.env.*
+
+# Not needed to build, and changes here would needlessly bust the layer cache.
+.git
+.gitignore
+.vercel
+.claude
+*.exe
+Dockerfile
+.dockerignore
+README.md
+render.yaml
+vercel.json
