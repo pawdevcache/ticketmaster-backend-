@@ -1,8 +1,8 @@
-package tm
+package config
 
 import "testing"
 
-// devMode decides whether a password-reset token is echoed back in an API
+// DevMode decides whether a password-reset token is echoed back in an API
 // response, so getting it wrong leaks account-takeover tokens to anyone who
 // knows an email address. It must fail safe: only an explicit development ENV
 // counts as dev.
@@ -25,8 +25,8 @@ func TestDevModeFailsSafe(t *testing.T) {
 		{"developmnt", false}, // typo must not open the gate
 	} {
 		t.Setenv("ENV", tc.env)
-		if got := devMode(); got != tc.want {
-			t.Errorf("ENV=%q: devMode() = %v, want %v", tc.env, got, tc.want)
+		if got := DevMode(); got != tc.want {
+			t.Errorf("ENV=%q: DevMode() = %v, want %v", tc.env, got, tc.want)
 		}
 	}
 }

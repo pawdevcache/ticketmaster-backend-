@@ -1,4 +1,4 @@
-package tm
+package models
 
 import (
 	"encoding/json"

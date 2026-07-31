@@ -1,32 +1,35 @@
-package tm
+package httpapi
 
 import (
 	"log"
 	"net/http"
+
+	"ticketmaster/internal/config"
+	"ticketmaster/internal/store"
 )
 
 // New builds the fully-wired API handler. Used by both the local dev server
 // (main.go) and the Vercel serverless entrypoint (api/index.go).
 func New() (http.Handler, error) {
-	loadEnv(".env") // no-op when the file is absent (e.g. on Vercel)
-	store, err := NewStore(env("MONGO_URI", "mongodb://localhost:27017"), env("DB_NAME", "ticketmaster"))
+	config.Load(".env") // no-op when the file is absent (e.g. on Vercel)
+	st, err := store.NewStore(config.Get("MONGO_URI", "mongodb://localhost:27017"), config.Get("DB_NAME", "ticketmaster"))
 	if err != nil {
 		return nil, err
 	}
 	// Best-effort: enforce unique email + token expiry. Don't fail startup if
 	// the DB is briefly unreachable — health will surface that separately.
-	if err := store.EnsureIndexes(); err != nil {
+	if err := st.EnsureIndexes(); err != nil {
 		log.Println("warning: could not create indexes:", err)
 	}
 	// Same deal for the optional bootstrap admin: log and carry on.
-	if err := store.EnsureAdmin(env("ADMIN_NAME", "Admin"), env("ADMIN_EMAIL", ""), env("ADMIN_PASSWORD", "")); err != nil {
+	if err := st.EnsureAdmin(config.Get("ADMIN_NAME", "Admin"), config.Get("ADMIN_EMAIL", ""), config.Get("ADMIN_PASSWORD", "")); err != nil {
 		log.Println("warning: could not seed admin user:", err)
 	}
-	s := &Server{store: store}
+	s := &Server{store: st}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		if err := store.Ping(); err != nil {
+		if err := st.Ping(); err != nil {
 			writeJSON(w, 200, map[string]string{"status": "degraded", "db": "disconnected", "error": err.Error()})
 			return
 		}
@@ -116,9 +119,6 @@ func New() (http.Handler, error) {
 
 	return cors(mux), nil
 }
-
-// Port returns the configured listen port for the local dev server.
-func Port() string { return env("PORT", "8080") }
 
 // cors allows browser-based API clients and answers preflight OPTIONS requests.
 func cors(next http.Handler) http.Handler {

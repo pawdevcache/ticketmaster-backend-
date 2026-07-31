@@ -1,0 +1,129 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"ticketmaster/internal/models"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"golang.org/x/crypto/bcrypt"
+)
+
+// --- Users & auth ---
+
+func (s *Store) Register(u *models.User) error {
+	// Store only a bcrypt hash, never the plaintext password.
+	hash, err := bcrypt.GenerateFromPassword([]byte(u.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	u.ID = newID()
+	u.Password = string(hash)
+	if u.Role != models.RoleAdmin {
+		u.Role = models.RoleUser
+	}
+	if err := insert(s.users, u); err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return ErrDuplicate // unique index on email (see EnsureIndexes)
+		}
+		return err
+	}
+	return nil
+}
+
+// Login verifies credentials and issues a token. The authenticated user is
+// returned as well so callers can check the role before handing the token out.
+func (s *Store) Login(email, password string) (string, *models.User, error) {
+	u, err := findOne[models.User](s.users, bson.D{{Key: "email", Value: email}})
+	if err != nil {
+		return "", nil, ErrUnauthorized
+	}
+	// Constant-time hash comparison; wrong password and unknown user look alike.
+	if bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)) != nil {
+		return "", nil, ErrUnauthorized
+	}
+	tok := newID()
+	if err := insert(s.tokens, bson.D{
+		{Key: "_id", Value: tok}, {Key: "userId", Value: u.ID}, {Key: "createdAt", Value: time.Now()},
+	}); err != nil {
+		return "", nil, err
+	}
+	u.Password = ""
+	return tok, u, nil
+}
+
+func (s *Store) UserByToken(tok string) (*models.User, error) {
+	if tok == "" {
+		return nil, ErrUnauthorized
+	}
+	t, err := findOne[struct {
+		UserID string `bson:"userId"`
+	}](s.tokens, bson.D{{Key: "_id", Value: tok}})
+	if err != nil {
+		return nil, ErrUnauthorized
+	}
+	return s.userByID(t.UserID)
+}
+
+// EnsureIndexes enforces a unique email and auto-expiring login tokens.
+// Best-effort: called once at startup.
+func (s *Store) EnsureIndexes() error {
+	cx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := s.users.Indexes().CreateOne(cx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "email", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	}); err != nil {
+		return err
+	}
+	if _, err := s.tokens.Indexes().CreateOne(cx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "createdAt", Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(int32(tokenTTL.Seconds())),
+	}); err != nil {
+		return err
+	}
+	_, err := s.resets.Indexes().CreateOne(cx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "createdAt", Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(int32(ResetTTL.Seconds())),
+	})
+	return err
+}
+
+// EnsureAdmin seeds a bootstrap admin so there is someone to sign in as before
+// any admin exists. It creates the account when the email is unknown, and only
+// promotes the role when it already exists — an existing password is never
+// overwritten, so rotating the env var can't hijack a live account.
+func (s *Store) EnsureAdmin(name, email, password string) error {
+	if email == "" || password == "" {
+		return nil // seeding not configured
+	}
+	u, err := findOne[models.User](s.users, bson.D{{Key: "email", Value: email}})
+	if err == nil {
+		if u.IsAdmin() {
+			return nil
+		}
+		cx, cancel := ctx()
+		defer cancel()
+		_, err = s.users.UpdateByID(cx, u.ID, bson.D{{Key: "$set", Value: bson.D{{Key: "role", Value: models.RoleAdmin}}}})
+		return err
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if name == "" {
+		name = "Admin"
+	}
+	admin := &models.User{Name: name, Email: email, Password: password, Role: models.RoleAdmin}
+	if err := s.Register(admin); err != nil && !errors.Is(err, ErrDuplicate) {
+		return err // a duplicate means a concurrent start won the race — fine
+	}
+	return nil
+}
+
+func (s *Store) userByID(id string) (*models.User, error) {
+	return findOne[models.User](s.users, bson.D{{Key: "_id", Value: id}})
+}

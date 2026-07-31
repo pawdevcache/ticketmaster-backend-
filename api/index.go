@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"sync"
 
-	"ticketmaster/tm"
+	"ticketmaster/internal/httpapi"
 )
 
 // The handler is built once per warm serverless instance and reused across
@@ -29,7 +29,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, fmt.Sprintf("panic: %v", rec))
 		}
 	}()
-	once.Do(func() { app, initErr = tm.New() })
+	once.Do(func() { app, initErr = httpapi.New() })
 	if initErr != nil {
 		writeErr(w, "startup: "+initErr.Error())
 		return
