@@ -12,6 +12,9 @@ import (
 	"ticketmaster/internal/store"
 )
 
+// Server carries the dependencies shared by every handler. Handlers hang off
+// this type rather than reading package-level state, so tests can build one
+// against a different store.
 type Server struct{ store *store.Store }
 
 const maxBodyBytes = 1 << 20 // 1 MiB cap on request bodies

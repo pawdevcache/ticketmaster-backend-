@@ -1,3 +1,6 @@
+// Package handler is the Vercel serverless entrypoint. Vercel discovers
+// functions by scanning this directory, which is why it sits at the repository
+// root instead of under internal/ with the rest of the code.
 package handler
 
 import (

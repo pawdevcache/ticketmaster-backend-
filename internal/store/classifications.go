@@ -9,16 +9,25 @@ import (
 
 // --- Classifications ---
 
+// Classifications returns every classification. The set is small and fixed in
+// practice (segments and genres), so there is no filter.
 func (s *Store) Classifications() ([]*models.Classification, error) {
 	return findAll[models.Classification](s.classes, bson.D{})
 }
+
+// Classification returns a single classification, or ErrNotFound.
 func (s *Store) Classification(id string) (*models.Classification, error) {
 	return findOne[models.Classification](s.classes, bson.D{{Key: "_id", Value: id}})
 }
+
+// CreateClassification assigns a fresh id to c and inserts it.
 func (s *Store) CreateClassification(c *models.Classification) error {
 	c.ID = newID()
 	return insert(s.classes, c)
 }
+
+// UpdateClassification replaces the stored classification matching c.ID, or
+// returns ErrNotFound.
 func (s *Store) UpdateClassification(c *models.Classification) error {
 	return replace(s.classes, c.ID, c)
 }

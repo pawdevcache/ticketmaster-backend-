@@ -1,13 +1,22 @@
+// Package models holds the domain types shared by the storage and HTTP layers.
+//
+// Each type carries both json and bson tags, so the same struct is the wire
+// format and the database document. That keeps the API and the collections in
+// step, at the cost of one rule: a field the client must not set (an id, or a
+// derived count such as Event.TicketsSold) has to be restored by the handler
+// after decoding a request, because decoding alone will happily overwrite it.
 package models
 
 import "time"
 
+// Classification is the genre taxonomy an event or attraction is filed under.
 type Classification struct {
 	ID      string `json:"id" bson:"_id"`
 	Segment string `json:"segment" bson:"segment"` // e.g. Music, Sports, Arts & Theatre
 	Genre   string `json:"genre" bson:"genre"`     // e.g. Rock, Basketball
 }
 
+// Attraction is a performer, team or other act that appears at events.
 type Attraction struct {
 	ID               string `json:"id" bson:"_id"`
 	Name             string `json:"name" bson:"name"`
@@ -15,6 +24,7 @@ type Attraction struct {
 	ClassificationID string `json:"classificationId" bson:"classificationId"`
 }
 
+// Venue is a physical location that hosts events.
 type Venue struct {
 	ID       string `json:"id" bson:"_id"`
 	Name     string `json:"name" bson:"name"`
@@ -25,6 +35,9 @@ type Venue struct {
 	Capacity int    `json:"capacity" bson:"capacity"`
 }
 
+// Event is a single dated performance at a venue, and the thing tickets are
+// sold against. TicketsSold is owned by the booking flow — it is adjusted when
+// bookings are made and cancelled, never written from a request body.
 type Event struct {
 	ID               string   `json:"id" bson:"_id"`
 	Name             string   `json:"name" bson:"name"`
@@ -48,6 +61,9 @@ const (
 	RoleAdmin = "admin"
 )
 
+// User is an account. Password holds a bcrypt hash once stored, never the
+// plaintext; the json tag omits it when empty so handlers can blank the field
+// to keep the hash out of a response.
 type User struct {
 	ID    string `json:"id" bson:"_id"`
 	Name  string `json:"name" bson:"name"`
@@ -58,8 +74,11 @@ type User struct {
 	Password string `json:"password,omitempty" bson:"password"`
 }
 
+// IsAdmin reports whether the account may use the admin endpoints.
 func (u *User) IsAdmin() bool { return u.Role == RoleAdmin }
 
+// Booking is a user's claim on some of an event's tickets. Cancelling sets
+// Status rather than deleting the row, so the history survives.
 type Booking struct {
 	ID        string    `json:"id" bson:"_id"`
 	UserID    string    `json:"userId" bson:"userId"`

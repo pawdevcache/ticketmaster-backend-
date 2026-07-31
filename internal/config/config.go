@@ -1,3 +1,8 @@
+// Package config reads deployment settings from the process environment.
+//
+// Values come from real environment variables first and a .env file second, so
+// a platform's dashboard always beats a checked-out file. Nothing here holds
+// state: every lookup reads the environment at the moment it is called.
 package config
 
 import (

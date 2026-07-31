@@ -15,6 +15,9 @@ import (
 
 // --- Users & auth ---
 
+// Register creates an account, replacing u.Password with its bcrypt hash. Any
+// role other than admin is normalised to RoleUser. Returns ErrDuplicate when
+// the email is already registered.
 func (s *Store) Register(u *models.User) error {
 	// Store only a bcrypt hash, never the plaintext password.
 	hash, err := bcrypt.GenerateFromPassword([]byte(u.Password), bcrypt.DefaultCost)
@@ -56,6 +59,9 @@ func (s *Store) Login(email, password string) (string, *models.User, error) {
 	return tok, u, nil
 }
 
+// UserByToken resolves a bearer token to its account. Every failure — empty,
+// unknown or expired token, missing user — comes back as ErrUnauthorized, so
+// callers can't accidentally leak which one it was.
 func (s *Store) UserByToken(tok string) (*models.User, error) {
 	if tok == "" {
 		return nil, ErrUnauthorized

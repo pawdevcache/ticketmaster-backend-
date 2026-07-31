@@ -1,3 +1,6 @@
+// Command server runs the Ticketmaster API as an ordinary HTTP server, for
+// local development and for container or Render deployments. Vercel uses
+// api/index.go instead; both build the same handler via httpapi.New.
 package main
 
 import (

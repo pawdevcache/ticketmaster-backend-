@@ -31,6 +31,8 @@ func (s *Store) Users(keyword, role string) ([]*models.User, error) {
 	return findAll[models.User](s.users, f)
 }
 
+// User returns a single account, or ErrNotFound. The returned User still holds
+// the password hash, so callers must blank it before it reaches a response.
 func (s *Store) User(id string) (*models.User, error) { return s.userByID(id) }
 
 // UpdateUser expects u.Password to already hold a bcrypt hash.

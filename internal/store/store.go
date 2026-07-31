@@ -1,3 +1,15 @@
+// Package store is the MongoDB persistence layer: every database read and
+// write in the service goes through it.
+//
+// It knows nothing about HTTP. Failures come back as the sentinel errors
+// declared here — ErrNotFound, ErrUnauthorized, ErrDuplicate, ErrSoldOut,
+// ErrInUse — and the HTTP layer maps those to status codes, so changing a
+// status code never means editing this package.
+//
+// Two rules are enforced here rather than left to callers, because getting
+// them wrong corrupts data: ticket counts move only through Book and the
+// cancel path, and a record still referenced by another record cannot be
+// deleted (ErrInUse).
 package store
 
 import (
@@ -61,6 +73,9 @@ type Store struct {
 	resets   *mongo.Collection
 }
 
+// NewStore prepares a store against the given MongoDB URI and database. It
+// does not contact the server: see the comment inside on why startup must
+// survive an unreachable database, and use Ping to test connectivity.
 func NewStore(uri, dbName string) (*Store, error) {
 	opts := options.Client().ApplyURI(uri).
 		SetServerSelectionTimeout(5 * time.Second).

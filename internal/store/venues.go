@@ -8,6 +8,8 @@ import (
 
 // --- Venues ---
 
+// Venues lists venues narrowed by a case-insensitive substring match on name
+// and/or city. Empty arguments are skipped, so no arguments means "all".
 func (s *Store) Venues(keyword, city string) ([]*models.Venue, error) {
 	f := bson.D{}
 	if keyword != "" {
@@ -18,13 +20,19 @@ func (s *Store) Venues(keyword, city string) ([]*models.Venue, error) {
 	}
 	return findAll[models.Venue](s.venues, f)
 }
+
+// Venue returns a single venue, or ErrNotFound.
 func (s *Store) Venue(id string) (*models.Venue, error) {
 	return findOne[models.Venue](s.venues, bson.D{{Key: "_id", Value: id}})
 }
+
+// CreateVenue assigns a fresh id to v and inserts it.
 func (s *Store) CreateVenue(v *models.Venue) error {
 	v.ID = newID()
 	return insert(s.venues, v)
 }
+
+// UpdateVenue replaces the stored venue matching v.ID, or returns ErrNotFound.
 func (s *Store) UpdateVenue(v *models.Venue) error {
 	return replace(s.venues, v.ID, v)
 }

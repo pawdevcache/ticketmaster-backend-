@@ -13,6 +13,10 @@ import (
 
 // --- Bookings ---
 
+// Book reserves qty tickets on an event and records the booking. The seat
+// count is decremented with a single conditional update, so two buyers racing
+// for the last tickets can't both succeed. Returns ErrNotFound for an unknown
+// event and ErrSoldOut when it isn't on sale or hasn't enough tickets left.
 func (s *Store) Book(userID, eventID string, qty int) (*models.Booking, error) {
 	if qty < 1 {
 		return nil, ErrSoldOut
@@ -47,14 +51,19 @@ func (s *Store) Book(userID, eventID string, qty int) (*models.Booking, error) {
 	return b, insert(s.bookings, b)
 }
 
+// Booking returns one of userID's bookings. The user id is part of the query
+// rather than checked afterwards, so one user can never read another's booking.
 func (s *Store) Booking(id, userID string) (*models.Booking, error) {
 	return findOne[models.Booking](s.bookings, bson.D{{Key: "_id", Value: id}, {Key: "userId", Value: userID}})
 }
 
+// UserBookings lists every booking belonging to one user, cancelled included.
 func (s *Store) UserBookings(userID string) ([]*models.Booking, error) {
 	return findAll[models.Booking](s.bookings, bson.D{{Key: "userId", Value: userID}})
 }
 
+// CancelBooking cancels a booking the user owns and returns its tickets to the
+// event. Returns ErrNotFound if the booking isn't theirs.
 func (s *Store) CancelBooking(id, userID string) (*models.Booking, error) {
 	b, err := s.Booking(id, userID)
 	if err != nil {

@@ -1,3 +1,20 @@
+// Package httpapi is the HTTP layer: routing, request decoding, authorisation
+// and response shaping. It is the only package that knows about status codes.
+//
+// Routes fall into three tiers, which is the thing to keep straight when
+// adding one:
+//
+//   - public — discovery reads, register, login, the forgotten-password pair
+//   - user   — needs a bearer token; a user only ever sees their own records
+//   - admin  — needs a token belonging to an admin account (see adminAuth)
+//
+// Every write to a discovery resource is admin-only, including the create
+// routes that share a path with a public read.
+//
+// Updates are deliberately partial. PUT and PATCH share a handler that decodes
+// the request over the record already in the database, so a body needs only
+// the fields that change — and any field the client must not control is put
+// back afterwards.
 package httpapi
 
 import (

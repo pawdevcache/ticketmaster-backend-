@@ -8,8 +8,11 @@ import (
 
 // --- booking administration (no per-user scoping) ---
 
+// BookingFilter narrows an admin booking search. Empty fields are ignored.
 type BookingFilter struct{ UserID, EventID, Status string }
 
+// AllBookings lists bookings across every user. Unlike UserBookings there is no
+// ownership constraint, so callers must confirm the requester is an admin.
 func (s *Store) AllBookings(f BookingFilter) ([]*models.Booking, error) {
 	q := bson.D{}
 	if f.UserID != "" {
@@ -24,6 +27,8 @@ func (s *Store) AllBookings(f BookingFilter) ([]*models.Booking, error) {
 	return findAll[models.Booking](s.bookings, q)
 }
 
+// BookingByID returns any booking regardless of owner, or ErrNotFound. Use
+// Booking instead when acting on behalf of a specific user.
 func (s *Store) BookingByID(id string) (*models.Booking, error) {
 	return findOne[models.Booking](s.bookings, bson.D{{Key: "_id", Value: id}})
 }
