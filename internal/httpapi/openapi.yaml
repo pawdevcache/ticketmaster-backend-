@@ -1,0 +1,1280 @@
+openapi: 3.0.3
+
+info:
+  title: Ticketmaster API
+  version: "1.0.0"
+  description: |
+    Event discovery and ticketing API.
+
+    ## Authentication
+
+    `POST /api/login` (or `/api/admin/login`) returns a token. Send it as
+    `Authorization: Bearer <token>` on any endpoint marked with a padlock.
+    Tokens expire 24 hours after they are issued.
+
+    Endpoints fall into three tiers:
+
+    * **public** — discovery reads, registration, login, password recovery
+    * **user** — any signed-in account; a user only ever sees their own bookings
+    * **admin** — an account with `role: admin`
+
+    Every write to a discovery resource is admin-only, including the create
+    routes that share a path with a public read.
+
+    ## Partial updates
+
+    `PUT` and `PATCH` behave identically: the body is decoded over the stored
+    record, so send only the fields that change. Server-owned fields (`id`,
+    and `ticketsSold` on an event) are ignored if present in a body.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: /
+    description: Same origin as this page
+
+tags:
+  - name: Service
+    description: Health and service metadata
+  - name: Discovery
+    description: Public catalogue reads
+  - name: Discovery (admin)
+    description: Catalogue writes — admin token required
+  - name: Auth
+    description: Registration, login and password recovery
+  - name: Bookings
+    description: A signed-in user's own bookings
+  - name: Admin — accounts
+    description: User administration
+  - name: Admin — bookings
+    description: Bookings across all users
+
+security: []
+
+paths:
+  /:
+    get:
+      tags: [Service]
+      summary: Service metadata and endpoint index
+      responses:
+        "200":
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service: { type: string, example: Ticketmaster API }
+                  status: { type: string, example: running }
+                  endpoints:
+                    type: object
+                    properties:
+                      public: { type: array, items: { type: string } }
+                      user: { type: array, items: { type: string } }
+                      admin: { type: array, items: { type: string } }
+
+  /health:
+    get:
+      tags: [Service]
+      summary: Liveness and database connectivity
+      description: |
+        Always returns 200 while the process is serving. A database that is
+        unreachable is reported as `degraded` rather than a failure status, so
+        a container does not restart-loop through a brief database outage.
+      responses:
+        "200":
+          description: Process is up; check `status` for database state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok, degraded] }
+                  db: { type: string, enum: [connected, disconnected] }
+                  error: { type: string, description: Present only when degraded }
+              examples:
+                healthy:
+                  value: { status: ok, db: connected }
+                degraded:
+                  value: { status: degraded, db: disconnected, error: "mongo unreachable at ..." }
+
+  /docs:
+    get:
+      tags: [Service]
+      summary: Interactive API reference (this page)
+      description: Swagger UI. Loads its assets from a CDN, so it needs internet access in the browser.
+      responses:
+        "200":
+          description: HTML documentation page
+          content:
+            text/html:
+              schema: { type: string }
+
+  /openapi.yaml:
+    get:
+      tags: [Service]
+      summary: This document
+      responses:
+        "200":
+          description: The OpenAPI specification
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  # ------------------------------------------------------------------ events
+
+  /discovery/v2/events:
+    get:
+      tags: [Discovery]
+      summary: Search events
+      parameters:
+        - { name: keyword, in: query, schema: { type: string }, description: Case-insensitive substring of the event name }
+        - { name: city, in: query, schema: { type: string }, description: Matches the city of the event's venue }
+        - { name: classificationId, in: query, schema: { type: string } }
+        - name: startDateTime
+          in: query
+          schema: { type: string, format: date-time }
+          description: Only events on or after this RFC3339 timestamp. Ignored if unparseable.
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Paged events
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PagedEnvelope"
+                  - type: object
+                    properties:
+                      _embedded:
+                        type: object
+                        properties:
+                          events:
+                            type: array
+                            items: { $ref: "#/components/schemas/Event" }
+    post:
+      tags: [Discovery (admin)]
+      summary: Create an event
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EventInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Event" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /discovery/v2/events/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      tags: [Discovery]
+      summary: Get one event
+      responses:
+        "200":
+          description: The event
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Event" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Discovery (admin)]
+      summary: Update an event (partial)
+      description: |
+        Send only the fields to change. `ticketsSold` is owned by the booking
+        flow and is ignored if supplied. Lowering `ticketsTotal` below the
+        number already sold is rejected with 400.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EventInput" }
+      responses:
+        "200":
+          description: Updated event
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Event" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Discovery (admin)]
+      summary: Update an event (identical to PUT)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EventInput" }
+      responses:
+        "200":
+          description: Updated event
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Event" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Discovery (admin)]
+      summary: Delete an event
+      description: Refused with 409 while the event has confirmed bookings.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/InUse" }
+
+  # ------------------------------------------------------------------ venues
+
+  /discovery/v2/venues:
+    get:
+      tags: [Discovery]
+      summary: Search venues
+      parameters:
+        - { name: keyword, in: query, schema: { type: string } }
+        - { name: city, in: query, schema: { type: string } }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Paged venues
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PagedEnvelope"
+                  - type: object
+                    properties:
+                      _embedded:
+                        type: object
+                        properties:
+                          venues:
+                            type: array
+                            items: { $ref: "#/components/schemas/Venue" }
+    post:
+      tags: [Discovery (admin)]
+      summary: Create a venue
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VenueInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Venue" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /discovery/v2/venues/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      tags: [Discovery]
+      summary: Get one venue
+      responses:
+        "200":
+          description: The venue
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Venue" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Discovery (admin)]
+      summary: Update a venue (partial)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VenueInput" }
+      responses:
+        "200":
+          description: Updated venue
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Venue" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Discovery (admin)]
+      summary: Update a venue (identical to PUT)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VenueInput" }
+      responses:
+        "200":
+          description: Updated venue
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Venue" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Discovery (admin)]
+      summary: Delete a venue
+      description: Refused with 409 while any event is scheduled there.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/InUse" }
+
+  # ------------------------------------------------------------- attractions
+
+  /discovery/v2/attractions:
+    get:
+      tags: [Discovery]
+      summary: Search attractions
+      parameters:
+        - { name: keyword, in: query, schema: { type: string } }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Paged attractions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PagedEnvelope"
+                  - type: object
+                    properties:
+                      _embedded:
+                        type: object
+                        properties:
+                          attractions:
+                            type: array
+                            items: { $ref: "#/components/schemas/Attraction" }
+    post:
+      tags: [Discovery (admin)]
+      summary: Create an attraction
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AttractionInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Attraction" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /discovery/v2/attractions/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      tags: [Discovery]
+      summary: Get one attraction
+      responses:
+        "200":
+          description: The attraction
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Attraction" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Discovery (admin)]
+      summary: Update an attraction (partial)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AttractionInput" }
+      responses:
+        "200":
+          description: Updated attraction
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Attraction" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Discovery (admin)]
+      summary: Update an attraction (identical to PUT)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AttractionInput" }
+      responses:
+        "200":
+          description: Updated attraction
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Attraction" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Discovery (admin)]
+      summary: Delete an attraction
+      description: Refused with 409 while any event still lists it.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/InUse" }
+
+  # ---------------------------------------------------------- classifications
+
+  /discovery/v2/classifications:
+    get:
+      tags: [Discovery]
+      summary: List classifications
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Paged classifications
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PagedEnvelope"
+                  - type: object
+                    properties:
+                      _embedded:
+                        type: object
+                        properties:
+                          classifications:
+                            type: array
+                            items: { $ref: "#/components/schemas/Classification" }
+    post:
+      tags: [Discovery (admin)]
+      summary: Create a classification
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClassificationInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Classification" }
+        "400":
+          description: segment is required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /discovery/v2/classifications/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      tags: [Discovery]
+      summary: Get one classification
+      responses:
+        "200":
+          description: The classification
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Classification" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Discovery (admin)]
+      summary: Update a classification (partial)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClassificationInput" }
+      responses:
+        "200":
+          description: Updated classification
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Classification" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Discovery (admin)]
+      summary: Update a classification (identical to PUT)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClassificationInput" }
+      responses:
+        "200":
+          description: Updated classification
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Classification" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Discovery (admin)]
+      summary: Delete a classification
+      description: Refused with 409 while events or attractions still use it.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/InUse" }
+
+  # -------------------------------------------------------------------- auth
+
+  /api/register:
+    post:
+      tags: [Auth]
+      summary: Register a user account
+      description: |
+        `role` in the body is ignored — an account created here is always a
+        normal user. Admin accounts come from `/api/admin/register`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string, example: Ann Smith }
+                email: { type: string, format: email, example: ann@example.com }
+                password: { type: string, format: password, example: pw123456 }
+      responses:
+        "201":
+          description: Account created. The password hash is never returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400":
+          description: name, email and password are required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/login:
+    post:
+      tags: [Auth]
+      summary: Sign in
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Credentials" }
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginResponse" }
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Request a password-reset token
+      description: |
+        Always answers 200 with the same message whether or not the address has
+        an account, so the endpoint cannot be used to discover who is
+        registered. Admin accounts are excluded from the flow.
+
+        No mail service is configured, so the token is written to the server
+        log. Outside production (`ENV` set to development/dev/local/test) it is
+        also returned in the response as `resetToken` to make local testing
+        workable — note that this does reveal whether the account exists.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "200":
+          description: Request accepted (identical whether or not the account exists)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  resetToken:
+                    type: string
+                    description: Non-production only
+                  note: { type: string }
+        "400":
+          description: email is required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/reset-password:
+    post:
+      tags: [Auth]
+      summary: Set a new password using a reset token
+      description: |
+        The token is single-use and expires one hour after it was issued.
+        Requesting a new one invalidates any earlier token. A successful reset
+        also revokes every existing login session for that account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, newPassword]
+              properties:
+                token: { type: string, description: The token from /api/forgot-password }
+                newPassword: { type: string, format: password, minLength: 6 }
+      responses:
+        "200":
+          description: Password updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: "password updated, please sign in again" }
+        "400":
+          description: Missing fields, password too short, or an invalid/used/expired token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  # ------------------------------------------------------------ admin: auth
+
+  /api/admin/register:
+    post:
+      tags: [Admin — accounts]
+      summary: Create an admin account
+      description: |
+        Requires the shared secret from `ADMIN_REGISTRATION_KEY`, sent either as
+        the `X-Admin-Key` header or as `adminKey` in the body. Registration is
+        disabled (503) while that variable is unset.
+      parameters:
+        - name: X-Admin-Key
+          in: header
+          schema: { type: string }
+          description: The registration secret. Alternatively send `adminKey` in the body.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                adminKey: { type: string, description: Used when the header is absent }
+      responses:
+        "201":
+          description: Admin account created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403":
+          description: Invalid admin key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: ADMIN_REGISTRATION_KEY is not set, so registration is disabled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/admin/login:
+    post:
+      tags: [Admin — accounts]
+      summary: Sign in as an admin
+      description: |
+        A non-admin account gets the same 401 as a wrong password, so this
+        endpoint does not reveal which emails belong to admins.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Credentials" }
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginResponse" }
+        "401":
+          description: Invalid credentials, or the account is not an admin
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/admin/me:
+    get:
+      tags: [Admin — accounts]
+      summary: The signed-in admin
+      description: Useful for validating a stored token on page load.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The admin account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ----------------------------------------------------------- admin: users
+
+  /api/admin/users:
+    get:
+      tags: [Admin — accounts]
+      summary: List accounts
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: keyword, in: query, schema: { type: string }, description: Substring of name or email }
+        - { name: role, in: query, schema: { type: string, enum: [user, admin] } }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Paged accounts, without password hashes
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PagedEnvelope"
+                  - type: object
+                    properties:
+                      _embedded:
+                        type: object
+                        properties:
+                          users:
+                            type: array
+                            items: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/admin/users/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      tags: [Admin — accounts]
+      summary: Get one account
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Admin — accounts]
+      summary: Update an account (partial)
+      description: |
+        A `password` in the body is plaintext and is hashed before storage;
+        omit it to leave the current password alone. An admin cannot remove
+        their own admin role.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserInput" }
+      responses:
+        "200":
+          description: Updated account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400":
+          description: Missing email, or an attempt to self-demote
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Email already registered to another account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    patch:
+      tags: [Admin — accounts]
+      summary: Update an account (identical to PUT)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserInput" }
+      responses:
+        "200":
+          description: Updated account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Email already registered to another account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [Admin — accounts]
+      summary: Delete an account
+      description: |
+        Refused with 409 while the user holds confirmed bookings. An admin
+        cannot delete their own account (400).
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: "Deleted, along with that account's login tokens" }
+        "400":
+          description: Attempt to delete your own account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/InUse" }
+
+  # -------------------------------------------------------- admin: bookings
+
+  /api/admin/bookings:
+    get:
+      tags: [Admin — bookings]
+      summary: List bookings across all users
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: userId, in: query, schema: { type: string } }
+        - { name: eventId, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [confirmed, cancelled] } }
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+      responses:
+        "200":
+          description: Paged bookings
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PagedEnvelope"
+                  - type: object
+                    properties:
+                      _embedded:
+                        type: object
+                        properties:
+                          bookings:
+                            type: array
+                            items: { $ref: "#/components/schemas/Booking" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/admin/bookings/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      tags: [Admin — bookings]
+      summary: Get any booking
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The booking
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Admin — bookings]
+      summary: Delete a booking outright
+      description: |
+        Erases the record. A still-confirmed booking releases its tickets back
+        to the event first, so an event is never left overcounted. Prefer
+        `/cancel` when the history matters.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/admin/bookings/{id}/cancel:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      tags: [Admin — bookings]
+      summary: Cancel any user's booking
+      description: |
+        Sets the status to `cancelled` and returns the tickets to the event,
+        keeping the record for audit. Cancelling an already-cancelled booking
+        is a safe no-op.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The cancelled booking
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---------------------------------------------------------- user bookings
+
+  /api/bookings:
+    get:
+      tags: [Bookings]
+      summary: List your own bookings
+      description: Returns a plain array, not the paged envelope used elsewhere.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Every booking belonging to the signed-in user
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Booking" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Bookings]
+      summary: Book tickets
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eventId, quantity]
+              properties:
+                eventId: { type: string }
+                quantity: { type: integer, minimum: 1, example: 2 }
+      responses:
+        "201":
+          description: Booking confirmed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Event not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Event is not on sale, or not enough tickets remain
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/bookings/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      tags: [Bookings]
+      summary: Get one of your bookings
+      description: Another user's booking returns 404, not 403.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The booking
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Bookings]
+      summary: Cancel one of your bookings
+      description: |
+        Cancels rather than deletes: the record is kept with `status:
+        cancelled` and the tickets go back to the event. Returns the booking,
+        not 204.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: The cancelled booking
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: A token from `/api/login` or `/api/admin/login`.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+      description: Zero-based page number.
+    Size:
+      name: size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      description: Page size. Values above 100 are capped at 100.
+
+  responses:
+    BadRequest:
+      description: Malformed or invalid request body
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Missing, expired or invalid bearer token
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: unauthorized }
+    Forbidden:
+      description: Authenticated, but the account is not an admin
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: admin access required }
+    NotFound:
+      description: No such record
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InUse:
+      description: Still referenced by other records, so it cannot be deleted
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+      example: { error: event not found }
+
+    PagedEnvelope:
+      type: object
+      properties:
+        _embedded:
+          type: object
+          description: Holds a single array keyed by resource name.
+        page:
+          type: object
+          properties:
+            size: { type: integer, example: 20 }
+            totalElements: { type: integer, example: 42 }
+            totalPages: { type: integer, example: 3 }
+            number: { type: integer, description: Zero-based page number, example: 0 }
+
+    Classification:
+      type: object
+      properties:
+        id: { type: string, readOnly: true }
+        segment: { type: string, example: Music }
+        genre: { type: string, example: Rock }
+
+    ClassificationInput:
+      type: object
+      properties:
+        segment: { type: string, example: Music }
+        genre: { type: string, example: Rock }
+
+    Attraction:
+      type: object
+      properties:
+        id: { type: string, readOnly: true }
+        name: { type: string, example: The Band }
+        type: { type: string, example: performer }
+        classificationId: { type: string }
+
+    AttractionInput:
+      type: object
+      properties:
+        name: { type: string }
+        type: { type: string, example: performer }
+        classificationId: { type: string }
+
+    Venue:
+      type: object
+      properties:
+        id: { type: string, readOnly: true }
+        name: { type: string, example: National Arena }
+        city: { type: string, example: Colombo }
+        state: { type: string }
+        country: { type: string }
+        address: { type: string }
+        capacity: { type: integer, example: 5000 }
+
+    VenueInput:
+      type: object
+      properties:
+        name: { type: string }
+        city: { type: string }
+        state: { type: string }
+        country: { type: string }
+        address: { type: string }
+        capacity: { type: integer }
+
+    Event:
+      type: object
+      properties:
+        id: { type: string, readOnly: true }
+        name: { type: string, example: Rock Night }
+        date: { type: string, format: date-time }
+        venueId: { type: string }
+        attractionIds:
+          type: array
+          nullable: true
+          items: { type: string }
+        classificationId: { type: string }
+        priceMin: { type: number, format: double, example: 50 }
+        priceMax: { type: number, format: double, example: 120 }
+        ticketsTotal: { type: integer, example: 500 }
+        ticketsSold:
+          type: integer
+          readOnly: true
+          description: Maintained by the booking flow; ignored in request bodies.
+        status:
+          type: string
+          enum: [onsale, offsale, cancelled]
+          description: Defaults to onsale when an event is created.
+        description: { type: string }
+        title: { type: string }
+
+    EventInput:
+      type: object
+      properties:
+        name: { type: string, example: Rock Night }
+        date:
+          type: string
+          description: "`YYYY-MM-DD` or a full RFC3339 timestamp."
+          example: "2026-09-01"
+        venueId: { type: string }
+        attractionIds:
+          type: array
+          items: { type: string }
+        classificationId: { type: string }
+        priceMin: { type: number, format: double, example: 50 }
+        priceMax: { type: number, format: double, example: 120 }
+        ticketsTotal: { type: integer, example: 500 }
+        status: { type: string, enum: [onsale, offsale, cancelled] }
+        description: { type: string }
+        title: { type: string }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, readOnly: true }
+        name: { type: string, example: Ann Smith }
+        email: { type: string, format: email }
+        role:
+          type: string
+          enum: [user, admin]
+          description: Set by the server from the endpoint used; ignored in request bodies on /api/register.
+
+    UserInput:
+      type: object
+      properties:
+        name: { type: string }
+        email: { type: string, format: email }
+        role: { type: string, enum: [user, admin] }
+        password:
+          type: string
+          format: password
+          description: Plaintext; hashed before storage. Omit to keep the current password.
+
+    Booking:
+      type: object
+      properties:
+        id: { type: string, readOnly: true }
+        userId: { type: string, readOnly: true }
+        eventId: { type: string }
+        quantity: { type: integer, example: 2 }
+        total: { type: number, format: double, description: quantity × the event's priceMin }
+        status: { type: string, enum: [confirmed, cancelled] }
+        createdAt: { type: string, format: date-time, readOnly: true }
+
+    Credentials:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, example: admin@gmail.com }
+        password: { type: string, format: password }
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: "Send as `Authorization: Bearer <token>`. Valid for 24 hours."
+        user: { $ref: "#/components/schemas/User" }

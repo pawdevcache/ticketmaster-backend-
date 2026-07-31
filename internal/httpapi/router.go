@@ -53,6 +53,11 @@ func New() (http.Handler, error) {
 		writeJSON(w, 200, map[string]string{"status": "ok", "db": "connected"})
 	})
 
+	// API reference. /docs is the human-readable page; /openapi.yaml is the
+	// spec any OpenAPI tool can consume.
+	mux.HandleFunc("GET /docs", swaggerUI)
+	mux.HandleFunc("GET /openapi.yaml", openAPI)
+
 	// Root: {$} matches only the exact "/" path, so real unknown routes still 404.
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, 200, map[string]any{
@@ -60,7 +65,7 @@ func New() (http.Handler, error) {
 			"status":  "running",
 			"endpoints": map[string][]string{
 				"public": {
-					"GET /health",
+					"GET /health", "GET /docs", "GET /openapi.yaml",
 					"GET /discovery/v2/{events|venues|attractions|classifications}",
 					"GET /discovery/v2/{events|venues|attractions|classifications}/{id}",
 					"POST /api/register", "POST /api/login",
