@@ -11,9 +11,10 @@ import (
 // BookingFilter narrows an admin booking search. Empty fields are ignored.
 type BookingFilter struct{ UserID, EventID, Status string }
 
-// AllBookings lists bookings across every user. Unlike UserBookings there is no
-// ownership constraint, so callers must confirm the requester is an admin.
-func (s *Store) AllBookings(f BookingFilter) ([]*models.Booking, error) {
+// AllBookings returns one page of bookings across every user, plus the total
+// number that matched. Unlike UserBookings there is no ownership constraint,
+// so callers must confirm the requester is an admin.
+func (s *Store) AllBookings(f BookingFilter, p Page) ([]*models.Booking, int64, error) {
 	q := bson.D{}
 	if f.UserID != "" {
 		q = append(q, bson.E{Key: "userId", Value: f.UserID})
@@ -24,7 +25,7 @@ func (s *Store) AllBookings(f BookingFilter) ([]*models.Booking, error) {
 	if f.Status != "" {
 		q = append(q, bson.E{Key: "status", Value: f.Status})
 	}
-	return findAll[models.Booking](s.bookings, q)
+	return findPage[models.Booking](s.bookings, q, p)
 }
 
 // BookingByID returns any booking regardless of owner, or ErrNotFound. Use

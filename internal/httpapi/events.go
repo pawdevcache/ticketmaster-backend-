@@ -16,12 +16,13 @@ func (s *Server) searchEvents(w http.ResponseWriter, r *http.Request) {
 	if t, err := time.Parse(time.RFC3339, q.Get("startDateTime")); err == nil {
 		f.StartAfter = t
 	}
-	events, err := s.store.Events(f)
+	p := pageParams(r)
+	events, total, err := s.store.Events(f, p)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	paginate(w, "events", events, r)
+	writePage(w, "events", events, total, p)
 }
 
 func (s *Server) getEvent(w http.ResponseWriter, r *http.Request) {

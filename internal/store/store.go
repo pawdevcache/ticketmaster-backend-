@@ -154,6 +154,65 @@ func like(field, value string) bson.E {
 	return bson.E{Key: field, Value: primitive.Regex{Pattern: regexp.QuoteMeta(value), Options: "i"}}
 }
 
+// Page selects one slice of a result set.
+//
+// Size and Number are normalised on use rather than trusted, because this is
+// the last layer before the database: a negative skip is a driver error and an
+// unbounded limit is how one request reads a whole collection into memory.
+type Page struct {
+	Number int // zero-based
+	Size   int
+}
+
+// Page size bounds, applied by Page.normalise.
+const (
+	DefaultPageSize = 20
+	MaxPageSize     = 100
+)
+
+func (p Page) normalise() Page {
+	if p.Size <= 0 {
+		p.Size = DefaultPageSize
+	}
+	if p.Size > MaxPageSize {
+		p.Size = MaxPageSize
+	}
+	if p.Number < 0 {
+		p.Number = 0
+	}
+	return p
+}
+
+// findPage returns one page of matching documents plus the total number that
+// matched, so a caller can report both without reading everything.
+//
+// Results are sorted by _id. Without an explicit sort MongoDB makes no promise
+// about ordering between queries, so page 2 could repeat or skip documents
+// from page 1.
+func findPage[T any](c *mongo.Collection, filter bson.D, p Page) ([]*T, int64, error) {
+	p = p.normalise()
+	cx, cancel := ctx()
+	defer cancel()
+	total, err := c.CountDocuments(cx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+	cur, err := c.Find(cx, filter, options.Find().
+		SetSort(bson.D{{Key: "_id", Value: 1}}).
+		SetSkip(int64(p.Number)*int64(p.Size)).
+		SetLimit(int64(p.Size)))
+	if err != nil {
+		return nil, 0, err
+	}
+	// Start from an empty slice, never nil, so an empty page serialises as []
+	// rather than null.
+	out := []*T{}
+	if err := cur.All(cx, &out); err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
+}
+
 func findAll[T any](c *mongo.Collection, filter bson.D) ([]*T, error) {
 	cx, cancel := ctx()
 	defer cancel()

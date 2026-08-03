@@ -8,14 +8,15 @@ import (
 
 // --- Attractions ---
 
-// Attractions lists attractions whose name contains keyword, case-insensitively.
-// An empty keyword returns all of them.
-func (s *Store) Attractions(keyword string) ([]*models.Attraction, error) {
+// Attractions returns one page of attractions whose name contains keyword,
+// case-insensitively, plus the total number that matched. An empty keyword
+// matches all of them.
+func (s *Store) Attractions(keyword string, p Page) ([]*models.Attraction, int64, error) {
 	f := bson.D{}
 	if keyword != "" {
 		f = append(f, like("name", keyword))
 	}
-	return findAll[models.Attraction](s.attracts, f)
+	return findPage[models.Attraction](s.attracts, f, p)
 }
 
 // Attraction returns a single attraction, or ErrNotFound.

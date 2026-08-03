@@ -10,12 +10,13 @@ import (
 
 func (s *Server) searchVenues(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	venues, err := s.store.Venues(q.Get("keyword"), q.Get("city"))
+	p := pageParams(r)
+	venues, total, err := s.store.Venues(q.Get("keyword"), q.Get("city"), p)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	paginate(w, "venues", venues, r)
+	writePage(w, "venues", venues, total, p)
 }
 
 func (s *Server) getVenue(w http.ResponseWriter, r *http.Request) {

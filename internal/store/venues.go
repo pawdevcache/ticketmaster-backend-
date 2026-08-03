@@ -8,9 +8,10 @@ import (
 
 // --- Venues ---
 
-// Venues lists venues narrowed by a case-insensitive substring match on name
-// and/or city. Empty arguments are skipped, so no arguments means "all".
-func (s *Store) Venues(keyword, city string) ([]*models.Venue, error) {
+// Venues returns one page of venues narrowed by a case-insensitive substring
+// match on name and/or city, plus the total number that matched. Empty
+// arguments are skipped, so no filter means "all".
+func (s *Store) Venues(keyword, city string, p Page) ([]*models.Venue, int64, error) {
 	f := bson.D{}
 	if keyword != "" {
 		f = append(f, like("name", keyword))
@@ -18,7 +19,7 @@ func (s *Store) Venues(keyword, city string) ([]*models.Venue, error) {
 	if city != "" {
 		f = append(f, like("city", city))
 	}
-	return findAll[models.Venue](s.venues, f)
+	return findPage[models.Venue](s.venues, f, p)
 }
 
 // Venue returns a single venue, or ErrNotFound.

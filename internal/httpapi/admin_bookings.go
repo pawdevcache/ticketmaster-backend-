@@ -14,14 +14,15 @@ func (s *Server) adminListBookings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	bookings, err := s.store.AllBookings(store.BookingFilter{
+	p := pageParams(r)
+	bookings, total, err := s.store.AllBookings(store.BookingFilter{
 		UserID: q.Get("userId"), EventID: q.Get("eventId"), Status: q.Get("status"),
-	})
+	}, p)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	paginate(w, "bookings", bookings, r)
+	writePage(w, "bookings", bookings, total, p)
 }
 
 func (s *Server) adminGetBooking(w http.ResponseWriter, r *http.Request) {

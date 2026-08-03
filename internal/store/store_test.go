@@ -90,6 +90,30 @@ func TestLikeTruncationKeepsValidUTF8(t *testing.T) {
 	}
 }
 
+// Page reaches the driver as a skip and a limit. A negative skip is a driver
+// error and a zero limit means "no limit", which is exactly the unbounded read
+// paging exists to prevent — so normalise must fix both.
+func TestPageNormalise(t *testing.T) {
+	for _, tc := range []struct {
+		in         Page
+		wantNumber int
+		wantSize   int
+	}{
+		{Page{Number: 0, Size: 20}, 0, 20},              // ordinary
+		{Page{Number: 3, Size: 50}, 3, 50},              // ordinary
+		{Page{Number: 0, Size: 0}, 0, DefaultPageSize},  // unset size
+		{Page{Number: 0, Size: -5}, 0, DefaultPageSize}, // negative size
+		{Page{Number: 0, Size: 5000}, 0, MaxPageSize},   // over the cap
+		{Page{Number: -2, Size: 20}, 0, 20},             // negative page
+	} {
+		got := tc.in.normalise()
+		if got.Number != tc.wantNumber || got.Size != tc.wantSize {
+			t.Errorf("Page%+v.normalise() = {Number:%d Size:%d}, want {Number:%d Size:%d}",
+				tc.in, got.Number, got.Size, tc.wantNumber, tc.wantSize)
+		}
+	}
+}
+
 func utf8Valid(s string) bool {
 	for _, r := range s {
 		if r == '�' {

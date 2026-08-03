@@ -9,10 +9,11 @@ import (
 
 // --- Classifications ---
 
-// Classifications returns every classification. The set is small and fixed in
-// practice (segments and genres), so there is no filter.
-func (s *Store) Classifications() ([]*models.Classification, error) {
-	return findAll[models.Classification](s.classes, bson.D{})
+// Classifications returns one page of classifications plus the total count.
+// The set is small and fixed in practice (segments and genres), so there is no
+// filter — but it is paged like everything else so the envelope stays uniform.
+func (s *Store) Classifications(p Page) ([]*models.Classification, int64, error) {
+	return findPage[models.Classification](s.classes, bson.D{}, p)
 }
 
 // Classification returns a single classification, or ErrNotFound.

@@ -6,6 +6,7 @@ import (
 	"ticketmaster/internal/models"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // --- Events ---
@@ -17,10 +18,10 @@ type EventFilter struct {
 	StartAfter                      time.Time
 }
 
-// Events lists events matching f. City is resolved through the venues
-// collection first, since events store only a venueId — meaning a city filter
-// costs one extra query.
-func (s *Store) Events(f EventFilter) ([]*models.Event, error) {
+// Events returns one page of events matching f, plus the total number that
+// matched. City is resolved through the venues collection first, since events
+// store only a venueId — meaning a city filter costs one extra query.
+func (s *Store) Events(f EventFilter, p Page) ([]*models.Event, int64, error) {
 	q := bson.D{}
 	if f.Keyword != "" {
 		q = append(q, like("name", f.Keyword))
@@ -32,17 +33,37 @@ func (s *Store) Events(f EventFilter) ([]*models.Event, error) {
 		q = append(q, bson.E{Key: "date", Value: bson.D{{Key: "$gte", Value: f.StartAfter}}})
 	}
 	if f.City != "" {
-		vs, err := s.Venues("", f.City)
+		ids, err := s.venueIDsInCity(f.City)
 		if err != nil {
-			return nil, err
-		}
-		ids := make([]string, len(vs))
-		for i, v := range vs {
-			ids[i] = v.ID
+			return nil, 0, err
 		}
 		q = append(q, bson.E{Key: "venueId", Value: bson.D{{Key: "$in", Value: ids}}})
 	}
-	return findAll[models.Event](s.events, q)
+	return findPage[models.Event](s.events, q, p)
+}
+
+// venueIDsInCity collects every venue id in a city. This one deliberately is
+// not paged — it feeds an $in clause, so a partial list would silently drop
+// events. Only the _id is read back, so the documents themselves never load.
+func (s *Store) venueIDsInCity(city string) ([]string, error) {
+	cx, cancel := ctx()
+	defer cancel()
+	cur, err := s.venues.Find(cx, bson.D{like("city", city)},
+		options.Find().SetProjection(bson.D{{Key: "_id", Value: 1}}))
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		ID string `bson:"_id"`
+	}
+	if err := cur.All(cx, &rows); err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(rows))
+	for i, r := range rows {
+		ids[i] = r.ID
+	}
+	return ids, nil
 }
 
 // Event returns a single event, or ErrNotFound.

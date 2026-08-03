@@ -43,26 +43,31 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
-// paginate slices items and wraps them in a Discovery-style envelope.
-func paginate[T any](w http.ResponseWriter, key string, items []T, r *http.Request) {
-	size := atoiDefault(r.URL.Query().Get("size"), 20)
-	if size > 100 {
-		size = 100 // cap page size to avoid abusive large responses
+// pageParams reads the page and size query parameters. Size is capped here as
+// well as in the store: this is where an over-large request is a client error
+// worth clamping quietly, rather than a last line of defence.
+func pageParams(r *http.Request) store.Page {
+	size := atoiDefault(r.URL.Query().Get("size"), store.DefaultPageSize)
+	if size > store.MaxPageSize {
+		size = store.MaxPageSize
 	}
-	page := atoiDefault(r.URL.Query().Get("page"), 0)
-	total := len(items)
-	start := page * size
-	end := start + size
-	if start > total {
-		start = total
+	return store.Page{Number: atoiDefault(r.URL.Query().Get("page"), 0), Size: size}
+}
+
+// writePage wraps one page of items in the Discovery-style envelope. The page
+// has already been sliced by the database, so total comes from a separate
+// count rather than from len(items).
+func writePage[T any](w http.ResponseWriter, key string, items []T, total int64, p store.Page) {
+	pages := int64(0)
+	if p.Size > 0 {
+		pages = (total + int64(p.Size) - 1) / int64(p.Size)
 	}
-	if end > total {
-		end = total
-	}
-	pages := (total + size - 1) / size
 	writeJSON(w, http.StatusOK, map[string]any{
-		"_embedded": map[string]any{key: items[start:end]},
-		"page":      map[string]int{"size": size, "totalElements": total, "totalPages": pages, "number": page},
+		"_embedded": map[string]any{key: items},
+		"page": map[string]int64{
+			"size": int64(p.Size), "totalElements": total,
+			"totalPages": pages, "number": int64(p.Number),
+		},
 	})
 }
 

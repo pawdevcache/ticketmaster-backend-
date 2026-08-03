@@ -9,12 +9,13 @@ import (
 // --- discovery: classifications ---
 
 func (s *Server) searchClassifications(w http.ResponseWriter, r *http.Request) {
-	classes, err := s.store.Classifications()
+	p := pageParams(r)
+	classes, total, err := s.store.Classifications(p)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	paginate(w, "classifications", classes, r)
+	writePage(w, "classifications", classes, total, p)
 }
 
 func (s *Server) getClassification(w http.ResponseWriter, r *http.Request) {

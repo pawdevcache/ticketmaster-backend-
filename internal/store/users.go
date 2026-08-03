@@ -17,8 +17,9 @@ func HashPassword(pw string) (string, error) {
 	return string(h), err
 }
 
-// Users lists accounts, optionally filtered by name/email substring and role.
-func (s *Store) Users(keyword, role string) ([]*models.User, error) {
+// Users returns one page of accounts, optionally filtered by a name/email
+// substring and by role, plus the total number that matched.
+func (s *Store) Users(keyword, role string, p Page) ([]*models.User, int64, error) {
 	f := bson.D{}
 	if keyword != "" {
 		f = append(f, bson.E{Key: "$or", Value: bson.A{
@@ -28,7 +29,7 @@ func (s *Store) Users(keyword, role string) ([]*models.User, error) {
 	if role != "" {
 		f = append(f, bson.E{Key: "role", Value: role})
 	}
-	return findAll[models.User](s.users, f)
+	return findPage[models.User](s.users, f, p)
 }
 
 // User returns a single account, or ErrNotFound. The returned User still holds

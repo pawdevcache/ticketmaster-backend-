@@ -9,12 +9,13 @@ import (
 // --- discovery: attractions ---
 
 func (s *Server) searchAttractions(w http.ResponseWriter, r *http.Request) {
-	attractions, err := s.store.Attractions(r.URL.Query().Get("keyword"))
+	p := pageParams(r)
+	attractions, total, err := s.store.Attractions(r.URL.Query().Get("keyword"), p)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	paginate(w, "attractions", attractions, r)
+	writePage(w, "attractions", attractions, total, p)
 }
 
 func (s *Server) getAttraction(w http.ResponseWriter, r *http.Request) {

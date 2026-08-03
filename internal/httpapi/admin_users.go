@@ -23,12 +23,13 @@ func (s *Server) adminListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	users, err := s.store.Users(q.Get("keyword"), q.Get("role"))
+	p := pageParams(r)
+	users, total, err := s.store.Users(q.Get("keyword"), q.Get("role"), p)
 	if err != nil {
 		serverError(w, err)
 		return
 	}
-	paginate(w, "users", scrub(users), r)
+	writePage(w, "users", scrub(users), total, p)
 }
 
 func (s *Server) adminGetUser(w http.ResponseWriter, r *http.Request) {
