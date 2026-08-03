@@ -42,7 +42,13 @@ func New() (http.Handler, error) {
 	if err := st.EnsureAdmin(config.Get("ADMIN_NAME", "Admin"), config.Get("ADMIN_EMAIL", ""), config.Get("ADMIN_PASSWORD", "")); err != nil {
 		log.Println("warning: could not seed admin user:", err)
 	}
-	s := &Server{store: st}
+	// Rate limiting protects the endpoints where a guess is worth something:
+	// credentials and password recovery.
+	limit, window := rateLimitSettings()
+	if limit <= 0 {
+		log.Println("warning: rate limiting is disabled (RATE_LIMIT_ATTEMPTS=0)")
+	}
+	s := &Server{store: st, limiter: newLimiter(limit, window)}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
@@ -110,17 +116,18 @@ func New() (http.Handler, error) {
 		mux.HandleFunc("DELETE "+base+"/{id}", res.del)
 	}
 
-	// Ticketing / commerce
-	mux.HandleFunc("POST /api/register", s.register)
-	mux.HandleFunc("POST /api/login", s.login)
+	// Ticketing / commerce. Each rate-limited route gets its own bucket, so
+	// exhausting login attempts does not also lock out registration.
+	mux.HandleFunc("POST /api/register", s.rateLimited("register", s.register))
+	mux.HandleFunc("POST /api/login", s.rateLimited("login", s.login))
 	// Forgotten-password flow: request a token, then trade it for a new password.
-	mux.HandleFunc("POST /api/forgot-password", s.forgotPassword)
-	mux.HandleFunc("POST /api/reset-password", s.resetPassword)
+	mux.HandleFunc("POST /api/forgot-password", s.rateLimited("forgot-password", s.forgotPassword))
+	mux.HandleFunc("POST /api/reset-password", s.rateLimited("reset-password", s.resetPassword))
 
 	// Admin accounts. Registration needs ADMIN_REGISTRATION_KEY; the resulting token
 	// is what the POST /discovery/v2/* create routes require.
-	mux.HandleFunc("POST /api/admin/register", s.adminRegister)
-	mux.HandleFunc("POST /api/admin/login", s.adminLogin)
+	mux.HandleFunc("POST /api/admin/register", s.rateLimited("admin-register", s.adminRegister))
+	mux.HandleFunc("POST /api/admin/login", s.rateLimited("admin-login", s.adminLogin))
 	mux.HandleFunc("GET /api/admin/me", s.adminMe)
 
 	// Admin management of accounts and of every user's bookings.

@@ -593,6 +593,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
 
   /api/login:
     post:
@@ -614,6 +615,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
 
   /api/forgot-password:
     post:
@@ -655,6 +657,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
 
   /api/reset-password:
     post:
@@ -688,6 +691,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
 
   # ------------------------------------------------------------ admin: auth
 
@@ -738,6 +742,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
 
   /api/admin/login:
     post:
@@ -762,6 +767,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
 
   /api/admin/me:
     get:
@@ -1114,6 +1120,18 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    TooManyRequests:
+      description: |
+        Rate limit exceeded for this endpoint and caller. The `Retry-After`
+        header gives the number of seconds to wait.
+      headers:
+        Retry-After:
+          description: Seconds until the next attempt is allowed
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "too many attempts, try again in 42 seconds" }
 
   schemas:
     Error:
