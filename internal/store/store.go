@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -131,9 +132,26 @@ func newSecret() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// like builds a case-insensitive "contains" regex filter, or nil to skip.
+// maxSearchLen bounds a search term. Escaping stops a pattern from
+// backtracking, but a megabyte-long literal still makes Mongo compare a
+// megabyte against every document in the collection.
+const maxSearchLen = 128
+
+// like builds a case-insensitive "contains" filter on a single field.
+//
+// The value is escaped before it becomes a regex. It arrives straight from a
+// query string on endpoints that need no authentication, so an unescaped
+// pattern such as "(a+)+$" would make the server backtrack for an unbounded
+// time — a denial of service anyone could trigger with one request. Escaping
+// makes the term a literal substring, which is the only thing a search box
+// ever meant.
 func like(field, value string) bson.E {
-	return bson.E{Key: field, Value: primitive.Regex{Pattern: value, Options: "i"}}
+	// Slice runes rather than bytes: cutting a multi-byte character in half
+	// would put invalid UTF-8 into the pattern.
+	if r := []rune(value); len(r) > maxSearchLen {
+		value = string(r[:maxSearchLen])
+	}
+	return bson.E{Key: field, Value: primitive.Regex{Pattern: regexp.QuoteMeta(value), Options: "i"}}
 }
 
 func findAll[T any](c *mongo.Collection, filter bson.D) ([]*T, error) {
