@@ -25,13 +25,21 @@ func (s *Store) AllBookings(f BookingFilter, p Page) ([]*models.Booking, int64, 
 	if f.Status != "" {
 		q = append(q, bson.E{Key: "status", Value: f.Status})
 	}
-	return findPage[models.Booking](s.bookings, q, p)
+	bs, total, err := findPage[models.Booking](s.bookings, q, p)
+	if err != nil {
+		return nil, 0, err
+	}
+	return bs, total, s.withEvents(bs)
 }
 
 // BookingByID returns any booking regardless of owner, or ErrNotFound. Use
 // Booking instead when acting on behalf of a specific user.
 func (s *Store) BookingByID(id string) (*models.Booking, error) {
-	return findOne[models.Booking](s.bookings, bson.D{{Key: "_id", Value: id}})
+	b, err := findOne[models.Booking](s.bookings, bson.D{{Key: "_id", Value: id}})
+	if err != nil {
+		return nil, err
+	}
+	return b, s.withEvents([]*models.Booking{b})
 }
 
 // AdminCancelBooking cancels any booking regardless of who owns it.

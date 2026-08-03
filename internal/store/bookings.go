@@ -48,18 +48,31 @@ func (s *Store) Book(userID, eventID string, qty int) (*models.Booking, error) {
 		ID: newID(), UserID: userID, EventID: eventID, Quantity: qty,
 		Total: e.PriceMin * float64(qty), Status: "confirmed", CreatedAt: time.Now(),
 	}
-	return b, insert(s.bookings, b)
+	if err := insert(s.bookings, b); err != nil {
+		return nil, err
+	}
+	// Attach the event so a client can show the ticket straight from the
+	// booking response, without a follow-up request.
+	return b, s.withEvents([]*models.Booking{b})
 }
 
 // Booking returns one of userID's bookings. The user id is part of the query
 // rather than checked afterwards, so one user can never read another's booking.
 func (s *Store) Booking(id, userID string) (*models.Booking, error) {
-	return findOne[models.Booking](s.bookings, bson.D{{Key: "_id", Value: id}, {Key: "userId", Value: userID}})
+	b, err := findOne[models.Booking](s.bookings, bson.D{{Key: "_id", Value: id}, {Key: "userId", Value: userID}})
+	if err != nil {
+		return nil, err
+	}
+	return b, s.withEvents([]*models.Booking{b})
 }
 
 // UserBookings lists every booking belonging to one user, cancelled included.
 func (s *Store) UserBookings(userID string) ([]*models.Booking, error) {
-	return findAll[models.Booking](s.bookings, bson.D{{Key: "userId", Value: userID}})
+	bs, err := findAll[models.Booking](s.bookings, bson.D{{Key: "userId", Value: userID}})
+	if err != nil {
+		return nil, err
+	}
+	return bs, s.withEvents(bs)
 }
 
 // CancelBooking cancels a booking the user owns and returns its tickets to the
@@ -89,6 +102,71 @@ func (s *Store) cancel(b *models.Booking) (*models.Booking, error) {
 	}
 	b.Status = "cancelled"
 	return b, nil
+}
+
+// withEvents fills in the Event summary on each booking.
+//
+// It runs two queries no matter how many bookings are passed — one for the
+// events, one for their venues — rather than a lookup per booking, which is
+// the difference between a ticket list costing 2 round trips and costing 2N.
+// A booking whose event has been deleted keeps a nil Event rather than failing
+// the whole read.
+func (s *Store) withEvents(bookings []*models.Booking) error {
+	if len(bookings) == 0 {
+		return nil
+	}
+	eventIDs := make([]string, 0, len(bookings))
+	seen := map[string]bool{}
+	for _, b := range bookings {
+		if b.EventID != "" && !seen[b.EventID] {
+			seen[b.EventID] = true
+			eventIDs = append(eventIDs, b.EventID)
+		}
+	}
+	if len(eventIDs) == 0 {
+		return nil
+	}
+
+	events, err := findAll[models.Event](s.events, bson.D{
+		{Key: "_id", Value: bson.D{{Key: "$in", Value: eventIDs}}},
+	})
+	if err != nil {
+		return err
+	}
+
+	venueIDs := make([]string, 0, len(events))
+	for _, e := range events {
+		if e.VenueID != "" {
+			venueIDs = append(venueIDs, e.VenueID)
+		}
+	}
+	venues := map[string]*models.Venue{}
+	if len(venueIDs) > 0 {
+		found, err := findAll[models.Venue](s.venues, bson.D{
+			{Key: "_id", Value: bson.D{{Key: "$in", Value: venueIDs}}},
+		})
+		if err != nil {
+			return err
+		}
+		for _, v := range found {
+			venues[v.ID] = v
+		}
+	}
+
+	summaries := make(map[string]*models.EventSummary, len(events))
+	for _, e := range events {
+		sum := &models.EventSummary{
+			ID: e.ID, Name: e.Name, Date: e.Date, Status: e.Status, VenueID: e.VenueID,
+		}
+		if v := venues[e.VenueID]; v != nil {
+			sum.VenueName, sum.VenueCity = v.Name, v.City
+		}
+		summaries[e.ID] = sum
+	}
+	for _, b := range bookings {
+		b.Event = summaries[b.EventID]
+	}
+	return nil
 }
 
 // releaseTickets hands a booking's seats back to its event.

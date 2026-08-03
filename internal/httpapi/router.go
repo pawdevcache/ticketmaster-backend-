@@ -87,6 +87,7 @@ func New() (http.Handler, error) {
 					"POST /discovery/v2/{events|venues|attractions|classifications}",
 					"PUT|PATCH /discovery/v2/{events|venues|attractions|classifications}/{id}",
 					"DELETE /discovery/v2/{events|venues|attractions|classifications}/{id}",
+					"GET /api/admin/analytics",
 					"GET /api/admin/users", "GET /api/admin/users/{id}",
 					"PUT|PATCH /api/admin/users/{id}", "DELETE /api/admin/users/{id}",
 					"GET /api/admin/bookings", "GET /api/admin/bookings/{id}",
@@ -132,6 +133,9 @@ func New() (http.Handler, error) {
 	mux.HandleFunc("POST /api/admin/register", s.rateLimited("admin-register", s.adminRegister))
 	mux.HandleFunc("POST /api/admin/login", s.rateLimited("admin-login", s.adminLogin))
 	mux.HandleFunc("GET /api/admin/me", s.adminMe)
+
+	// Dashboard figures for the admin Overview tab.
+	mux.HandleFunc("GET /api/admin/analytics", s.adminAnalytics)
 
 	// Admin management of accounts and of every user's bookings.
 	mux.HandleFunc("GET /api/admin/users", s.adminListUsers)

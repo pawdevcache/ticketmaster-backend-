@@ -800,6 +800,34 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  # ------------------------------------------------------- admin: analytics
+
+  /api/admin/analytics:
+    get:
+      tags: [Admin — bookings]
+      summary: Dashboard figures
+      description: |
+        Both dashboard series in one response: revenue per event and tickets
+        sold per category. Aggregated by the database, so the client does not
+        need to read the booking collection to chart it.
+
+        Confirmed bookings only — a cancelled booking has had its seats
+        released, so counting it would overstate revenue and demand.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: topEvents
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+          description: How many events to return, highest revenue first. Capped at 50.
+      responses:
+        "200":
+          description: Dashboard series
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Analytics" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   # ----------------------------------------------------------- admin: users
 
   /api/admin/users:
@@ -1297,6 +1325,52 @@ components:
         total: { type: number, format: double, description: quantity × the event's priceMin }
         status: { type: string, enum: [confirmed, cancelled] }
         createdAt: { type: string, format: date-time, readOnly: true }
+        event:
+          allOf:
+            - $ref: "#/components/schemas/EventSummary"
+          readOnly: true
+          description: |
+            Filled in on every read, so a ticket can be rendered without
+            fetching the event separately. Absent if the event has since been
+            deleted.
+
+    EventSummary:
+      type: object
+      description: The slice of an event a ticket needs — what, when and where.
+      properties:
+        id: { type: string }
+        name: { type: string, example: Rock Night }
+        date: { type: string, format: date-time }
+        status: { type: string, enum: [onsale, offsale, cancelled] }
+        venueId: { type: string }
+        venueName: { type: string, example: National Arena }
+        venueCity: { type: string, example: Colombo }
+
+    Analytics:
+      type: object
+      properties:
+        revenueByEvent:
+          type: array
+          description: Highest revenue first, limited by topEvents.
+          items:
+            type: object
+            properties:
+              eventId: { type: string }
+              name: { type: string, description: '"(deleted event)" if the event no longer exists' }
+              revenue: { type: number, format: double }
+              tickets: { type: integer }
+              bookings: { type: integer }
+        ticketsByCategory:
+          type: array
+          description: Most tickets first. Bookings with no reachable classification group under "Uncategorised".
+          items:
+            type: object
+            properties:
+              classificationId: { type: string }
+              segment: { type: string, example: Music }
+              genre: { type: string, example: Rock }
+              tickets: { type: integer }
+              revenue: { type: number, format: double }
 
     Credentials:
       type: object

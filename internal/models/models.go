@@ -87,4 +87,22 @@ type Booking struct {
 	Total     float64   `json:"total" bson:"total"`
 	Status    string    `json:"status" bson:"status"` // confirmed, cancelled
 	CreatedAt time.Time `json:"createdAt" bson:"createdAt"`
+
+	// Event is filled in when a booking is read, so a client can render a
+	// ticket without fetching each event separately. bson:"-" keeps it out of
+	// the stored document — it is a view of the events collection, not a copy,
+	// so an edited event shows through rather than going stale.
+	Event *EventSummary `json:"event,omitempty" bson:"-"`
+}
+
+// EventSummary is the slice of an event a ticket needs: what it is, when, and
+// where. Enough to print a ticket and build a calendar entry.
+type EventSummary struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Date      Date   `json:"date"`
+	Status    string `json:"status"`
+	VenueID   string `json:"venueId,omitempty"`
+	VenueName string `json:"venueName,omitempty"`
+	VenueCity string `json:"venueCity,omitempty"`
 }
