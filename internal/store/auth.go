@@ -75,6 +75,21 @@ func (s *Store) UserByToken(tok string) (*models.User, error) {
 	return s.userByID(t.UserID)
 }
 
+// Logout revokes one session by deleting its token, leaving the account's
+// other sessions alone — signing out of a laptop should not sign out a phone.
+//
+// Deleting a token that is already gone is not an error: signing out twice, or
+// racing two logout requests, should both succeed.
+func (s *Store) Logout(token string) error {
+	if token == "" {
+		return nil
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	_, err := s.tokens.DeleteOne(cx, bson.D{{Key: "_id", Value: token}})
+	return err
+}
+
 // EnsureIndexes enforces a unique email and auto-expiring login tokens.
 // Best-effort: called once at startup.
 func (s *Store) EnsureIndexes() error {

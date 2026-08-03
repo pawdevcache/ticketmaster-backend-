@@ -81,10 +81,15 @@ func atoiDefault(s string, d int) int {
 	return d
 }
 
+// bearerToken extracts the token from the Authorization header. Shared by auth
+// and logout, which needs the raw token in order to revoke it.
+func bearerToken(r *http.Request) string {
+	return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+}
+
 // auth resolves the bearer token to a user, or writes 401 and returns nil.
 func (s *Server) auth(w http.ResponseWriter, r *http.Request) *models.User {
-	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	u, err := s.store.UserByToken(tok)
+	u, err := s.store.UserByToken(bearerToken(r))
 	if err != nil {
 		fail(w, http.StatusUnauthorized, "unauthorized")
 		return nil

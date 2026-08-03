@@ -617,6 +617,22 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429": { $ref: "#/components/responses/TooManyRequests" }
 
+  /api/logout:
+    post:
+      tags: [Auth]
+      summary: Sign out
+      description: |
+        Revokes the token the request was made with, so it stops working
+        immediately rather than lingering until it expires. Only the calling
+        session ends — the same account signed in on another device stays
+        signed in.
+
+        Not rate-limited: ending your own session must always be possible.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Session revoked }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /api/forgot-password:
     post:
       tags: [Auth]

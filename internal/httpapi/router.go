@@ -78,6 +78,7 @@ func New() (http.Handler, error) {
 					"POST /api/forgot-password", "POST /api/reset-password",
 				},
 				"user": {
+					"POST /api/logout",
 					"POST /api/bookings", "GET /api/bookings",
 					"GET /api/bookings/{id}", "DELETE /api/bookings/{id}",
 				},
@@ -120,6 +121,8 @@ func New() (http.Handler, error) {
 	// exhausting login attempts does not also lock out registration.
 	mux.HandleFunc("POST /api/register", s.rateLimited("register", s.register))
 	mux.HandleFunc("POST /api/login", s.rateLimited("login", s.login))
+	// Not rate-limited: ending your own session must always be possible.
+	mux.HandleFunc("POST /api/logout", s.logout)
 	// Forgotten-password flow: request a token, then trade it for a new password.
 	mux.HandleFunc("POST /api/forgot-password", s.rateLimited("forgot-password", s.forgotPassword))
 	mux.HandleFunc("POST /api/reset-password", s.rateLimited("reset-password", s.resetPassword))

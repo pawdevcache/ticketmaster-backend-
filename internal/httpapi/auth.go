@@ -134,6 +134,23 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// logout revokes the token the request was made with.
+//
+// Until this existed a client could only forget its token locally while the
+// session stayed valid server-side for a full day, so a leaked token could not
+// be withdrawn. Only the calling session is revoked; the same account signed
+// in elsewhere stays signed in.
+func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	if s.auth(w, r) == nil {
+		return
+	}
+	if err := s.store.Logout(bearerToken(r)); err != nil {
+		serverError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // adminLogin issues a token only for admin accounts. Ordinary users get the
 // same "invalid credentials" response as a wrong password, so the endpoint
 // doesn't reveal which emails belong to admins.
