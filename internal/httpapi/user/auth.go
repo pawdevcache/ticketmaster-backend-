@@ -22,9 +22,12 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) { h.SignIn(w, r
 //
 // It always answers 200 with the same message, whether or not the address has
 // an account, so the endpoint can't be used to discover who is registered.
-// There is no mail service wired up, so the token is written to the server log;
-// outside production it also comes back in the response to keep local testing
-// workable. See resetPassword for step two.
+// That is also why a failed send cannot surface here: reporting it would tell
+// the caller the account exists.
+//
+// The token is emailed. Outside production it also comes back in the response,
+// which keeps local testing workable when no mail server is configured. See
+// resetPassword for step two.
 func (h *Handlers) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	var c struct {
 		Email string `json:"email"`
@@ -37,7 +40,10 @@ func (h *Handlers) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	tok, err := h.UserStore.CreateReset(c.Email)
 	switch {
 	case err == nil:
-		log.Printf("password reset token issued for %s (valid %s): %s", c.Email, core.ResetTTL, tok)
+		h.Mail.PasswordReset(c.Email, tok, core.ResetTTL)
+		if !h.Mail.Live() {
+			log.Printf("password reset token issued for %s (valid %s): %s", c.Email, core.ResetTTL, tok)
+		}
 		if config.DevMode() {
 			out["resetToken"] = tok
 			out["note"] = "resetToken is returned outside production only; set ENV=production to suppress it"

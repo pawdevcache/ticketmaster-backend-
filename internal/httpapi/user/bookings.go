@@ -24,6 +24,9 @@ func (h *Handlers) CreateBooking(w http.ResponseWriter, r *http.Request) {
 	b, err := h.UserStore.Book(u.ID, req.EventID, req.Quantity)
 	switch {
 	case err == nil:
+		// Best-effort: the seats are already reserved, so a mail failure must
+		// not turn a completed purchase into an error.
+		h.Mail.BookingConfirmed(u.Email, b)
 		web.WriteJSON(w, http.StatusCreated, b)
 	case errors.Is(err, core.ErrNotFound):
 		web.Fail(w, http.StatusNotFound, "event not found")

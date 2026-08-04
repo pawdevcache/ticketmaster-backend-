@@ -25,6 +25,7 @@ import (
 	"ticketmaster/internal/httpapi/admin"
 	"ticketmaster/internal/httpapi/user"
 	"ticketmaster/internal/httpapi/web"
+	"ticketmaster/internal/mail"
 	adminstore "ticketmaster/internal/store/admin"
 	"ticketmaster/internal/store/core"
 	userstore "ticketmaster/internal/store/user"
@@ -60,7 +61,19 @@ func New() (http.Handler, error) {
 	if limit <= 0 {
 		log.Println("warning: rate limiting is disabled (RATE_LIMIT_ATTEMPTS=0)")
 	}
-	deps := &web.Deps{Store: st, Limiter: web.NewLimiter(limit, window)}
+	mailer := mail.New(mail.Config{
+		Host:     config.Get("SMTP_HOST", ""),
+		Port:     config.Get("SMTP_PORT", "587"),
+		Username: config.Get("SMTP_USERNAME", ""),
+		Password: config.Get("SMTP_PASSWORD", ""),
+		From:     config.Get("SMTP_FROM", "no-reply@ticketmaster.local"),
+		Implicit: config.Get("SMTP_TLS", "starttls") == "implicit",
+		AppURL:   config.Get("APP_URL", ""),
+	})
+	if !mailer.Live() {
+		log.Println("warning: SMTP_HOST is unset — emails will be written to the log, not sent")
+	}
+	deps := &web.Deps{Store: st, Limiter: web.NewLimiter(limit, window), Mail: mailer}
 	u := user.New(deps, userstore.New(st))
 	a := admin.New(deps, adminstore.New(st))
 

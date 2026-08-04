@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ticketmaster/internal/mail"
 	"ticketmaster/internal/models"
 	"ticketmaster/internal/store/core"
 )
@@ -19,6 +20,9 @@ import (
 type Deps struct {
 	Store   *core.Store
 	Limiter *Limiter
+	// Mail is never nil: with no SMTP host configured it logs instead of
+	// sending, so handlers can call it unconditionally.
+	Mail *mail.Mailer
 }
 
 const MaxBodyBytes = 1 << 20 // 1 MiB cap on request bodies
