@@ -1,7 +1,7 @@
 package admin
 
 import (
-	"ticketmaster/internal/models"
+	adminmodels "ticketmaster/internal/models/admin"
 	"ticketmaster/internal/store/core"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -23,7 +23,7 @@ const (
 // Only confirmed bookings count. A cancelled booking has had its money
 // returned and its seats released, so counting it would overstate both
 // revenue and demand.
-func (s *Store) Analytics(topEvents int) (*models.Analytics, error) {
+func (s *Store) Analytics(topEvents int) (*adminmodels.Analytics, error) {
 	if topEvents <= 0 {
 		topEvents = DefaultTopEvents
 	}
@@ -38,11 +38,11 @@ func (s *Store) Analytics(topEvents int) (*models.Analytics, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &models.Analytics{RevenueByEvent: byEvent, TicketsByCategory: byCategory}, nil
+	return &adminmodels.Analytics{RevenueByEvent: byEvent, TicketsByCategory: byCategory}, nil
 }
 
 // revenueByEvent totals confirmed revenue per event, highest first.
-func (s *Store) revenueByEvent(limit int) ([]models.EventRevenue, error) {
+func (s *Store) revenueByEvent(limit int) ([]adminmodels.EventRevenue, error) {
 	cx, cancel := core.Ctx()
 	defer cancel()
 	cur, err := s.BookingsCol.Aggregate(cx, []bson.D{
@@ -77,13 +77,13 @@ func (s *Store) revenueByEvent(limit int) ([]models.EventRevenue, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := []models.EventRevenue{}
+	out := []adminmodels.EventRevenue{}
 	return out, cur.All(cx, &out)
 }
 
 // ticketsByCategory totals confirmed tickets per classification. Bookings
 // reach a category through their event, so this joins twice.
-func (s *Store) ticketsByCategory() ([]models.CategoryTickets, error) {
+func (s *Store) ticketsByCategory() ([]adminmodels.CategoryTickets, error) {
 	cx, cancel := core.Ctx()
 	defer cancel()
 	cur, err := s.BookingsCol.Aggregate(cx, []bson.D{
@@ -128,6 +128,6 @@ func (s *Store) ticketsByCategory() ([]models.CategoryTickets, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := []models.CategoryTickets{}
+	out := []adminmodels.CategoryTickets{}
 	return out, cur.All(cx, &out)
 }

@@ -1,4 +1,8 @@
-package models
+// Package admin holds the response shapes that only the administrative
+// endpoints produce. They are dashboard projections, not domain records: no
+// collection stores an Analytics, it is computed per request.
+
+package admin
 
 // Analytics is the admin dashboard payload: one request feeding both charts.
 type Analytics struct {
