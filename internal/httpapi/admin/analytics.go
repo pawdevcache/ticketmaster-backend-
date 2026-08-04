@@ -4,7 +4,7 @@ import (
 	"net/http"
 
 	"ticketmaster/internal/httpapi/web"
-	"ticketmaster/internal/store"
+	adminstore "ticketmaster/internal/store/admin"
 )
 
 // adminAnalytics returns both dashboard series in one response, so the
@@ -17,11 +17,11 @@ func (h *Handlers) Analytics(w http.ResponseWriter, r *http.Request) {
 	if h.AdminAuth(w, r) == nil {
 		return
 	}
-	top := web.AtoiDefault(r.URL.Query().Get("topEvents"), store.DefaultTopEvents)
-	if top > store.MaxTopEvents {
-		top = store.MaxTopEvents
+	top := web.AtoiDefault(r.URL.Query().Get("topEvents"), adminstore.DefaultTopEvents)
+	if top > adminstore.MaxTopEvents {
+		top = adminstore.MaxTopEvents
 	}
-	a, err := h.Store.Analytics(top)
+	a, err := h.AdminStore.Analytics(top)
 	if err != nil {
 		web.ServerError(w, err)
 		return

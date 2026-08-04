@@ -1,12 +1,11 @@
-package store
+package admin
 
 import (
 	"ticketmaster/internal/models"
+	"ticketmaster/internal/store/core"
 
 	"go.mongodb.org/mongo-driver/bson"
 )
-
-// --- booking administration (no per-user scoping) ---
 
 // BookingFilter narrows an admin booking search. Empty fields are ignored.
 type BookingFilter struct{ UserID, EventID, Status string }
@@ -14,7 +13,7 @@ type BookingFilter struct{ UserID, EventID, Status string }
 // AllBookings returns one page of bookings across every user, plus the total
 // number that matched. Unlike UserBookings there is no ownership constraint,
 // so callers must confirm the requester is an admin.
-func (s *Store) AllBookings(f BookingFilter, p Page) ([]*models.Booking, int64, error) {
+func (s *Store) AllBookings(f BookingFilter, p core.Page) ([]*models.Booking, int64, error) {
 	q := bson.D{}
 	if f.UserID != "" {
 		q = append(q, bson.E{Key: "userId", Value: f.UserID})
@@ -25,21 +24,11 @@ func (s *Store) AllBookings(f BookingFilter, p Page) ([]*models.Booking, int64, 
 	if f.Status != "" {
 		q = append(q, bson.E{Key: "status", Value: f.Status})
 	}
-	bs, total, err := findPage[models.Booking](s.bookings, q, p)
+	bs, total, err := core.FindPage[models.Booking](s.BookingsCol, q, p)
 	if err != nil {
 		return nil, 0, err
 	}
-	return bs, total, s.withEvents(bs)
-}
-
-// BookingByID returns any booking regardless of owner, or ErrNotFound. Use
-// Booking instead when acting on behalf of a specific user.
-func (s *Store) BookingByID(id string) (*models.Booking, error) {
-	b, err := findOne[models.Booking](s.bookings, bson.D{{Key: "_id", Value: id}})
-	if err != nil {
-		return nil, err
-	}
-	return b, s.withEvents([]*models.Booking{b})
+	return bs, total, s.WithEvents(bs)
 }
 
 // AdminCancelBooking cancels any booking regardless of who owns it.
@@ -48,7 +37,7 @@ func (s *Store) AdminCancelBooking(id string) (*models.Booking, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.cancel(b)
+	return s.Cancel(b)
 }
 
 // DeleteBooking erases a booking outright. A confirmed one releases its
@@ -59,11 +48,11 @@ func (s *Store) DeleteBooking(id string) error {
 		return err
 	}
 	if b.Status == "confirmed" {
-		cx, cancel := ctx()
+		cx, cancel := core.Ctx()
 		defer cancel()
-		if err := s.releaseTickets(cx, b); err != nil {
+		if err := s.ReleaseTickets(cx, b); err != nil {
 			return err
 		}
 	}
-	return remove(s.bookings, id)
+	return core.Remove(s.BookingsCol, id)
 }

@@ -6,7 +6,7 @@ import (
 
 	"ticketmaster/internal/httpapi/web"
 	"ticketmaster/internal/models"
-	"ticketmaster/internal/store"
+	"ticketmaster/internal/store/core"
 )
 
 // scrub blanks password hashes before users go out in a response.
@@ -23,7 +23,7 @@ func (h *Handlers) ListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	p := web.PageParams(r)
-	users, total, err := h.Store.Users(q.Get("keyword"), q.Get("role"), p)
+	users, total, err := h.AdminStore.Users(q.Get("keyword"), q.Get("role"), p)
 	if err != nil {
 		web.ServerError(w, err)
 		return
@@ -35,7 +35,7 @@ func (h *Handlers) GetUser(w http.ResponseWriter, r *http.Request) {
 	if h.AdminAuth(w, r) == nil {
 		return
 	}
-	u, err := h.Store.User(r.PathValue("id"))
+	u, err := h.AdminStore.User(r.PathValue("id"))
 	if err != nil {
 		web.Fail(w, http.StatusNotFound, "user not found")
 		return
@@ -51,7 +51,7 @@ func (h *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	if admin == nil {
 		return
 	}
-	u, err := h.Store.User(r.PathValue("id"))
+	u, err := h.AdminStore.User(r.PathValue("id"))
 	if err != nil {
 		web.Fail(w, http.StatusNotFound, "user not found")
 		return
@@ -69,7 +69,7 @@ func (h *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	// The stored value is a bcrypt hash, so anything different came from the
 	// request body as plaintext and needs hashing.
 	if u.Password != "" && u.Password != hash {
-		if u.Password, err = store.HashPassword(u.Password); err != nil {
+		if u.Password, err = core.HashPassword(u.Password); err != nil {
 			web.ServerError(w, err)
 			return
 		}
@@ -84,8 +84,8 @@ func (h *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		web.Fail(w, http.StatusBadRequest, "you cannot remove your own admin role")
 		return
 	}
-	if err := h.Store.UpdateUser(u); err != nil {
-		if errors.Is(err, store.ErrDuplicate) {
+	if err := h.AdminStore.UpdateUser(u); err != nil {
+		if errors.Is(err, core.ErrDuplicate) {
 			web.Fail(w, http.StatusConflict, "email already registered")
 			return
 		}
@@ -105,6 +105,6 @@ func (h *Handlers) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		web.Fail(w, http.StatusBadRequest, "you cannot delete your own account")
 		return
 	}
-	h.Deleted(w, h.Store.DeleteUser(r.PathValue("id")), "user",
+	h.Deleted(w, h.AdminStore.DeleteUser(r.PathValue("id")), "user",
 		"user holds confirmed bookings: cancel those first")
 }

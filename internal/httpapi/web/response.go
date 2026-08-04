@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"ticketmaster/internal/models"
-	"ticketmaster/internal/store"
+	"ticketmaster/internal/store/core"
 )
 
 // Deps carries the dependencies every handler needs. The user and admin
@@ -17,7 +17,7 @@ import (
 // through its own receiver rather than through package-level state — which is
 // also what lets a test build one against a different store.
 type Deps struct {
-	Store   *store.Store
+	Store   *core.Store
 	Limiter *Limiter
 }
 
@@ -50,18 +50,18 @@ func ReadJSON(w http.ResponseWriter, r *http.Request, v any) error {
 // PageParams reads the page and size query parameters. Size is capped here as
 // well as in the store: this is where an over-large request is a client error
 // worth clamping quietly, rather than a last line of defence.
-func PageParams(r *http.Request) store.Page {
-	size := AtoiDefault(r.URL.Query().Get("size"), store.DefaultPageSize)
-	if size > store.MaxPageSize {
-		size = store.MaxPageSize
+func PageParams(r *http.Request) core.Page {
+	size := AtoiDefault(r.URL.Query().Get("size"), core.DefaultPageSize)
+	if size > core.MaxPageSize {
+		size = core.MaxPageSize
 	}
-	return store.Page{Number: AtoiDefault(r.URL.Query().Get("page"), 0), Size: size}
+	return core.Page{Number: AtoiDefault(r.URL.Query().Get("page"), 0), Size: size}
 }
 
 // WritePage wraps one page of items in the Discovery-style envelope. The page
 // has already been sliced by the database, so total comes from a separate
 // count rather than from len(items).
-func WritePage[T any](w http.ResponseWriter, key string, items []T, total int64, p store.Page) {
+func WritePage[T any](w http.ResponseWriter, key string, items []T, total int64, p core.Page) {
 	pages := int64(0)
 	if p.Size > 0 {
 		pages = (total + int64(p.Size) - 1) / int64(p.Size)
@@ -118,9 +118,9 @@ func (d *Deps) Deleted(w http.ResponseWriter, err error, what, inUse string) {
 	switch {
 	case err == nil:
 		w.WriteHeader(http.StatusNoContent)
-	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, core.ErrNotFound):
 		Fail(w, http.StatusNotFound, what+" not found")
-	case errors.Is(err, store.ErrInUse):
+	case errors.Is(err, core.ErrInUse):
 		Fail(w, http.StatusConflict, inUse)
 	default:
 		ServerError(w, err)

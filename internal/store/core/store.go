@@ -10,7 +10,7 @@
 // them wrong corrupts data: ticket counts move only through Book and the
 // cancel path, and a record still referenced by another record cannot be
 // deleted (ErrInUse).
-package store
+package core
 
 import (
 	"context"
@@ -61,17 +61,17 @@ func redactURI(uri string) string {
 
 // Store is a MongoDB-backed datastore.
 type Store struct {
-	uri      string
-	client   *mongo.Client
-	db       *mongo.Database
-	classes  *mongo.Collection
-	attracts *mongo.Collection
-	venues   *mongo.Collection
-	events   *mongo.Collection
-	users    *mongo.Collection
-	bookings *mongo.Collection
-	tokens   *mongo.Collection
-	resets   *mongo.Collection
+	uri         string
+	client      *mongo.Client
+	db          *mongo.Database
+	ClassesCol  *mongo.Collection
+	AttractsCol *mongo.Collection
+	VenuesCol   *mongo.Collection
+	EventsCol   *mongo.Collection
+	UsersCol    *mongo.Collection
+	BookingsCol *mongo.Collection
+	TokensCol   *mongo.Collection
+	ResetsCol   *mongo.Collection
 }
 
 // NewStore prepares a store against the given MongoDB URI and database. It
@@ -91,17 +91,17 @@ func NewStore(uri, dbName string) (*Store, error) {
 	}
 	db := client.Database(dbName)
 	return &Store{
-		uri:      uri,
-		client:   client,
-		db:       db,
-		classes:  db.Collection("classifications"),
-		attracts: db.Collection("attractions"),
-		venues:   db.Collection("venues"),
-		events:   db.Collection("events"),
-		users:    db.Collection("users"),
-		bookings: db.Collection("bookings"),
-		tokens:   db.Collection("tokens"),
-		resets:   db.Collection("passwordResets"),
+		uri:         uri,
+		client:      client,
+		db:          db,
+		ClassesCol:  db.Collection("classifications"),
+		AttractsCol: db.Collection("attractions"),
+		VenuesCol:   db.Collection("venues"),
+		EventsCol:   db.Collection("events"),
+		UsersCol:    db.Collection("users"),
+		BookingsCol: db.Collection("bookings"),
+		TokensCol:   db.Collection("tokens"),
+		ResetsCol:   db.Collection("passwordResets"),
 	}, nil
 }
 
@@ -115,16 +115,16 @@ func (s *Store) Ping() error {
 	return nil
 }
 
-func ctx() (context.Context, context.CancelFunc) {
+func Ctx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 5*time.Second)
 }
 
-func newID() string { return primitive.NewObjectID().Hex() }
+func NewID() string { return primitive.NewObjectID().Hex() }
 
 // newSecret returns an unguessable 256-bit token. Reset tokens must not be
 // predictable, so this uses crypto/rand rather than the ObjectID scheme that
 // newID uses for document ids (ObjectIDs embed a timestamp and a counter).
-func newSecret() (string, error) {
+func NewSecret() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -145,7 +145,7 @@ const maxSearchLen = 128
 // time — a denial of service anyone could trigger with one request. Escaping
 // makes the term a literal substring, which is the only thing a search box
 // ever meant.
-func like(field, value string) bson.E {
+func Like(field, value string) bson.E {
 	// Slice runes rather than bytes: cutting a multi-byte character in half
 	// would put invalid UTF-8 into the pattern.
 	if r := []rune(value); len(r) > maxSearchLen {
@@ -189,9 +189,9 @@ func (p Page) normalise() Page {
 // Results are sorted by _id. Without an explicit sort MongoDB makes no promise
 // about ordering between queries, so page 2 could repeat or skip documents
 // from page 1.
-func findPage[T any](c *mongo.Collection, filter bson.D, p Page) ([]*T, int64, error) {
+func FindPage[T any](c *mongo.Collection, filter bson.D, p Page) ([]*T, int64, error) {
 	p = p.normalise()
-	cx, cancel := ctx()
+	cx, cancel := Ctx()
 	defer cancel()
 	total, err := c.CountDocuments(cx, filter)
 	if err != nil {
@@ -213,8 +213,8 @@ func findPage[T any](c *mongo.Collection, filter bson.D, p Page) ([]*T, int64, e
 	return out, total, nil
 }
 
-func findAll[T any](c *mongo.Collection, filter bson.D) ([]*T, error) {
-	cx, cancel := ctx()
+func FindAll[T any](c *mongo.Collection, filter bson.D) ([]*T, error) {
+	cx, cancel := Ctx()
 	defer cancel()
 	cur, err := c.Find(cx, filter)
 	if err != nil {
@@ -227,8 +227,8 @@ func findAll[T any](c *mongo.Collection, filter bson.D) ([]*T, error) {
 	return out, nil
 }
 
-func findOne[T any](c *mongo.Collection, filter bson.D) (*T, error) {
-	cx, cancel := ctx()
+func FindOne[T any](c *mongo.Collection, filter bson.D) (*T, error) {
+	cx, cancel := Ctx()
 	defer cancel()
 	var v T
 	err := c.FindOne(cx, filter).Decode(&v)
@@ -238,8 +238,8 @@ func findOne[T any](c *mongo.Collection, filter bson.D) (*T, error) {
 	return &v, err
 }
 
-func insert(c *mongo.Collection, doc any) error {
-	cx, cancel := ctx()
+func Insert(c *mongo.Collection, doc any) error {
+	cx, cancel := Ctx()
 	defer cancel()
 	_, err := c.InsertOne(cx, doc)
 	return err
@@ -248,8 +248,8 @@ func insert(c *mongo.Collection, doc any) error {
 // replace overwrites the document with the given id. Callers build the new
 // document by decoding the request over the stored one, so fields the client
 // left out keep their current values.
-func replace(c *mongo.Collection, id string, doc any) error {
-	cx, cancel := ctx()
+func Replace(c *mongo.Collection, id string, doc any) error {
+	cx, cancel := Ctx()
 	defer cancel()
 	res, err := c.ReplaceOne(cx, bson.D{{Key: "_id", Value: id}}, doc)
 	if err != nil {
@@ -261,8 +261,8 @@ func replace(c *mongo.Collection, id string, doc any) error {
 	return nil
 }
 
-func remove(c *mongo.Collection, id string) error {
-	cx, cancel := ctx()
+func Remove(c *mongo.Collection, id string) error {
+	cx, cancel := Ctx()
 	defer cancel()
 	res, err := c.DeleteOne(cx, bson.D{{Key: "_id", Value: id}})
 	if err != nil {
@@ -276,8 +276,8 @@ func remove(c *mongo.Collection, id string) error {
 
 // anyMatch reports whether at least one document matches — used by the delete
 // guards to detect records that are still referenced.
-func anyMatch(c *mongo.Collection, filter bson.D) (bool, error) {
-	cx, cancel := ctx()
+func AnyMatch(c *mongo.Collection, filter bson.D) (bool, error) {
+	cx, cancel := Ctx()
 	defer cancel()
 	n, err := c.CountDocuments(cx, filter, options.Count().SetLimit(1))
 	return n > 0, err

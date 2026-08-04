@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"ticketmaster/internal/store"
+	"ticketmaster/internal/store/core"
 )
 
 // The page block is what a client uses to decide whether to ask for another
@@ -16,15 +16,15 @@ func TestWritePageEnvelope(t *testing.T) {
 		name       string
 		items      []string
 		total      int64
-		page       store.Page
+		page       core.Page
 		wantPages  int64
 		wantNumber int64
 	}{
-		{"exact multiple", []string{"a", "b"}, 20, store.Page{Number: 0, Size: 10}, 2, 0},
-		{"partial last page", []string{"a"}, 21, store.Page{Number: 2, Size: 10}, 3, 2},
-		{"single page", []string{"a"}, 1, store.Page{Number: 0, Size: 20}, 1, 0},
-		{"no results", []string{}, 0, store.Page{Number: 0, Size: 20}, 0, 0},
-		{"page past the end", []string{}, 5, store.Page{Number: 9, Size: 20}, 1, 9},
+		{"exact multiple", []string{"a", "b"}, 20, core.Page{Number: 0, Size: 10}, 2, 0},
+		{"partial last page", []string{"a"}, 21, core.Page{Number: 2, Size: 10}, 3, 2},
+		{"single page", []string{"a"}, 1, core.Page{Number: 0, Size: 20}, 1, 0},
+		{"no results", []string{}, 0, core.Page{Number: 0, Size: 20}, 0, 0},
+		{"page past the end", []string{}, 5, core.Page{Number: 9, Size: 20}, 1, 9},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
@@ -57,7 +57,7 @@ func TestWritePageEnvelope(t *testing.T) {
 // the array without a nil check.
 func TestWritePageEmptyIsArrayNotNull(t *testing.T) {
 	rec := httptest.NewRecorder()
-	WritePage(rec, "things", []string{}, 0, store.Page{Number: 0, Size: 20})
+	WritePage(rec, "things", []string{}, 0, core.Page{Number: 0, Size: 20})
 	if body := rec.Body.String(); !contains(body, `"things":[]`) {
 		t.Errorf("empty page did not serialise as []: %s", body)
 	}
@@ -70,12 +70,12 @@ func TestPageParamsClampsSize(t *testing.T) {
 		wantSize int
 		wantNum  int
 	}{
-		{"", store.DefaultPageSize, 0},
+		{"", core.DefaultPageSize, 0},
 		{"?size=10&page=3", 10, 3},
-		{"?size=99999", store.MaxPageSize, 0},
-		{"?size=-1", store.DefaultPageSize, 0},
-		{"?size=abc", store.DefaultPageSize, 0},
-		{"?page=-4", store.DefaultPageSize, 0},
+		{"?size=99999", core.MaxPageSize, 0},
+		{"?size=-1", core.DefaultPageSize, 0},
+		{"?size=abc", core.DefaultPageSize, 0},
+		{"?page=-4", core.DefaultPageSize, 0},
 	} {
 		p := PageParams(httptest.NewRequest("GET", "/x"+tc.query, nil))
 		if p.Size != tc.wantSize || p.Number != tc.wantNum {

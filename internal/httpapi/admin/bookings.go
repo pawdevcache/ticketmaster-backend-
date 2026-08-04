@@ -5,7 +5,8 @@ import (
 	"net/http"
 
 	"ticketmaster/internal/httpapi/web"
-	"ticketmaster/internal/store"
+	adminstore "ticketmaster/internal/store/admin"
+	"ticketmaster/internal/store/core"
 )
 
 func (h *Handlers) ListBookings(w http.ResponseWriter, r *http.Request) {
@@ -14,7 +15,7 @@ func (h *Handlers) ListBookings(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	p := web.PageParams(r)
-	bookings, total, err := h.Store.AllBookings(store.BookingFilter{
+	bookings, total, err := h.AdminStore.AllBookings(adminstore.BookingFilter{
 		UserID: q.Get("userId"), EventID: q.Get("eventId"), Status: q.Get("status"),
 	}, p)
 	if err != nil {
@@ -43,9 +44,9 @@ func (h *Handlers) CancelBooking(w http.ResponseWriter, r *http.Request) {
 	if h.AdminAuth(w, r) == nil {
 		return
 	}
-	b, err := h.Store.AdminCancelBooking(r.PathValue("id"))
+	b, err := h.AdminStore.AdminCancelBooking(r.PathValue("id"))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, core.ErrNotFound) {
 			web.Fail(w, http.StatusNotFound, "booking not found")
 			return
 		}
@@ -59,5 +60,5 @@ func (h *Handlers) DeleteBooking(w http.ResponseWriter, r *http.Request) {
 	if h.AdminAuth(w, r) == nil {
 		return
 	}
-	h.Deleted(w, h.Store.DeleteBooking(r.PathValue("id")), "booking", "")
+	h.Deleted(w, h.AdminStore.DeleteBooking(r.PathValue("id")), "booking", "")
 }

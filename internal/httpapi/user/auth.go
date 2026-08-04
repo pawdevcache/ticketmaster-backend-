@@ -9,7 +9,7 @@ import (
 	"ticketmaster/internal/config"
 	"ticketmaster/internal/httpapi/web"
 	"ticketmaster/internal/models"
-	"ticketmaster/internal/store"
+	"ticketmaster/internal/store/core"
 )
 
 func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
@@ -34,15 +34,15 @@ func (h *Handlers) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := map[string]string{"status": "if that email has an account, a reset token has been issued"}
-	tok, err := h.Store.CreateReset(c.Email)
+	tok, err := h.UserStore.CreateReset(c.Email)
 	switch {
 	case err == nil:
-		log.Printf("password reset token issued for %s (valid %s): %s", c.Email, store.ResetTTL, tok)
+		log.Printf("password reset token issued for %s (valid %s): %s", c.Email, core.ResetTTL, tok)
 		if config.DevMode() {
 			out["resetToken"] = tok
 			out["note"] = "resetToken is returned outside production only; set ENV=production to suppress it"
 		}
-	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrUnauthorized):
+	case errors.Is(err, core.ErrNotFound), errors.Is(err, core.ErrUnauthorized):
 		// Unknown address, or an admin account: reveal neither.
 	default:
 		web.ServerError(w, err)
@@ -59,15 +59,15 @@ func (h *Handlers) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		Token       string `json:"token"`
 		NewPassword string `json:"newPassword"`
 	}
-	if web.ReadJSON(w, r, &c) != nil || c.Token == "" || len(c.NewPassword) < store.MinPasswordLen {
+	if web.ReadJSON(w, r, &c) != nil || c.Token == "" || len(c.NewPassword) < core.MinPasswordLen {
 		web.Fail(w, http.StatusBadRequest,
-			"token and a new password of at least "+strconv.Itoa(store.MinPasswordLen)+" characters are required")
+			"token and a new password of at least "+strconv.Itoa(core.MinPasswordLen)+" characters are required")
 		return
 	}
-	switch err := h.Store.ResetPassword(c.Token, c.NewPassword); {
+	switch err := h.UserStore.ResetPassword(c.Token, c.NewPassword); {
 	case err == nil:
 		web.WriteJSON(w, http.StatusOK, map[string]string{"status": "password updated, please sign in again"})
-	case errors.Is(err, store.ErrUnauthorized):
+	case errors.Is(err, core.ErrUnauthorized):
 		web.Fail(w, http.StatusBadRequest, "reset token is invalid, already used, or expired")
 	default:
 		web.ServerError(w, err)

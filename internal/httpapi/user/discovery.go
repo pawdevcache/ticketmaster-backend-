@@ -5,12 +5,12 @@ import (
 	"time"
 
 	"ticketmaster/internal/httpapi/web"
-	"ticketmaster/internal/store"
+	"ticketmaster/internal/store/core"
 )
 
 func (h *Handlers) SearchEvents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	f := store.EventFilter{Keyword: q.Get("keyword"), City: q.Get("city"), ClassificationID: q.Get("classificationId")}
+	f := core.EventFilter{Keyword: q.Get("keyword"), City: q.Get("city"), ClassificationID: q.Get("classificationId")}
 	if t, err := time.Parse(time.RFC3339, q.Get("startDateTime")); err == nil {
 		f.StartAfter = t
 	}

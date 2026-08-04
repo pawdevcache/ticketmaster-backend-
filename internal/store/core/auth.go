@@ -1,4 +1,4 @@
-package store
+package core
 
 import (
 	"context"
@@ -24,12 +24,12 @@ func (s *Store) Register(u *models.User) error {
 	if err != nil {
 		return err
 	}
-	u.ID = newID()
+	u.ID = NewID()
 	u.Password = string(hash)
 	if u.Role != models.RoleAdmin {
 		u.Role = models.RoleUser
 	}
-	if err := insert(s.users, u); err != nil {
+	if err := Insert(s.UsersCol, u); err != nil {
 		if mongo.IsDuplicateKeyError(err) {
 			return ErrDuplicate // unique index on email (see EnsureIndexes)
 		}
@@ -41,7 +41,7 @@ func (s *Store) Register(u *models.User) error {
 // Login verifies credentials and issues a token. The authenticated user is
 // returned as well so callers can check the role before handing the token out.
 func (s *Store) Login(email, password string) (string, *models.User, error) {
-	u, err := findOne[models.User](s.users, bson.D{{Key: "email", Value: email}})
+	u, err := FindOne[models.User](s.UsersCol, bson.D{{Key: "email", Value: email}})
 	if err != nil {
 		return "", nil, ErrUnauthorized
 	}
@@ -49,8 +49,8 @@ func (s *Store) Login(email, password string) (string, *models.User, error) {
 	if bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)) != nil {
 		return "", nil, ErrUnauthorized
 	}
-	tok := newID()
-	if err := insert(s.tokens, bson.D{
+	tok := NewID()
+	if err := Insert(s.TokensCol, bson.D{
 		{Key: "_id", Value: tok}, {Key: "userId", Value: u.ID}, {Key: "createdAt", Value: time.Now()},
 	}); err != nil {
 		return "", nil, err
@@ -66,13 +66,13 @@ func (s *Store) UserByToken(tok string) (*models.User, error) {
 	if tok == "" {
 		return nil, ErrUnauthorized
 	}
-	t, err := findOne[struct {
+	t, err := FindOne[struct {
 		UserID string `bson:"userId"`
-	}](s.tokens, bson.D{{Key: "_id", Value: tok}})
+	}](s.TokensCol, bson.D{{Key: "_id", Value: tok}})
 	if err != nil {
 		return nil, ErrUnauthorized
 	}
-	return s.userByID(t.UserID)
+	return s.UserByID(t.UserID)
 }
 
 // Logout revokes one session by deleting its token, leaving the account's
@@ -84,9 +84,9 @@ func (s *Store) Logout(token string) error {
 	if token == "" {
 		return nil
 	}
-	cx, cancel := ctx()
+	cx, cancel := Ctx()
 	defer cancel()
-	_, err := s.tokens.DeleteOne(cx, bson.D{{Key: "_id", Value: token}})
+	_, err := s.TokensCol.DeleteOne(cx, bson.D{{Key: "_id", Value: token}})
 	return err
 }
 
@@ -95,19 +95,19 @@ func (s *Store) Logout(token string) error {
 func (s *Store) EnsureIndexes() error {
 	cx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := s.users.Indexes().CreateOne(cx, mongo.IndexModel{
+	if _, err := s.UsersCol.Indexes().CreateOne(cx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "email", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	}); err != nil {
 		return err
 	}
-	if _, err := s.tokens.Indexes().CreateOne(cx, mongo.IndexModel{
+	if _, err := s.TokensCol.Indexes().CreateOne(cx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "createdAt", Value: 1}},
 		Options: options.Index().SetExpireAfterSeconds(int32(tokenTTL.Seconds())),
 	}); err != nil {
 		return err
 	}
-	_, err := s.resets.Indexes().CreateOne(cx, mongo.IndexModel{
+	_, err := s.ResetsCol.Indexes().CreateOne(cx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "createdAt", Value: 1}},
 		Options: options.Index().SetExpireAfterSeconds(int32(ResetTTL.Seconds())),
 	})
@@ -122,14 +122,14 @@ func (s *Store) EnsureAdmin(name, email, password string) error {
 	if email == "" || password == "" {
 		return nil // seeding not configured
 	}
-	u, err := findOne[models.User](s.users, bson.D{{Key: "email", Value: email}})
+	u, err := FindOne[models.User](s.UsersCol, bson.D{{Key: "email", Value: email}})
 	if err == nil {
 		if u.IsAdmin() {
 			return nil
 		}
-		cx, cancel := ctx()
+		cx, cancel := Ctx()
 		defer cancel()
-		_, err = s.users.UpdateByID(cx, u.ID, bson.D{{Key: "$set", Value: bson.D{{Key: "role", Value: models.RoleAdmin}}}})
+		_, err = s.UsersCol.UpdateByID(cx, u.ID, bson.D{{Key: "$set", Value: bson.D{{Key: "role", Value: models.RoleAdmin}}}})
 		return err
 	}
 	if !errors.Is(err, ErrNotFound) {
@@ -145,6 +145,6 @@ func (s *Store) EnsureAdmin(name, email, password string) error {
 	return nil
 }
 
-func (s *Store) userByID(id string) (*models.User, error) {
-	return findOne[models.User](s.users, bson.D{{Key: "_id", Value: id}})
+func (s *Store) UserByID(id string) (*models.User, error) {
+	return FindOne[models.User](s.UsersCol, bson.D{{Key: "_id", Value: id}})
 }

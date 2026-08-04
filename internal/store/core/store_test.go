@@ -1,4 +1,4 @@
-package store
+package core
 
 import (
 	"regexp"
@@ -8,13 +8,13 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
-// pattern pulls the compiled regex out of the filter like() builds.
+// pattern pulls the compiled regex out of the filter Like() builds.
 func pattern(t *testing.T, value string) primitive.Regex {
 	t.Helper()
-	e := like("name", value)
+	e := Like("name", value)
 	r, ok := e.Value.(primitive.Regex)
 	if !ok {
-		t.Fatalf("like() produced %T, want primitive.Regex", e.Value)
+		t.Fatalf("Like() produced %T, want primitive.Regex", e.Value)
 	}
 	return r
 }
@@ -34,7 +34,7 @@ func TestLikeEscapesRegexMetacharacters(t *testing.T) {
 		{`back\slash`, `back\\slash`},
 	} {
 		if got := pattern(t, tc.in).Pattern; got != tc.want {
-			t.Errorf("like(%q) pattern = %q, want %q", tc.in, got, tc.want)
+			t.Errorf("Like(%q) pattern = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
@@ -55,10 +55,10 @@ func TestLikeMatchesLiterally(t *testing.T) {
 		p := pattern(t, tc.term)
 		re, err := regexp.Compile("(?i)" + p.Pattern)
 		if err != nil {
-			t.Fatalf("like(%q) produced an uncompilable pattern %q: %v", tc.term, p.Pattern, err)
+			t.Fatalf("Like(%q) produced an uncompilable pattern %q: %v", tc.term, p.Pattern, err)
 		}
 		if got := re.MatchString(tc.subject); got != tc.want {
-			t.Errorf("like(%q) matching %q = %v, want %v", tc.term, tc.subject, got, tc.want)
+			t.Errorf("Like(%q) matching %q = %v, want %v", tc.term, tc.subject, got, tc.want)
 		}
 	}
 }

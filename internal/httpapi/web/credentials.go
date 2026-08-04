@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	"ticketmaster/internal/models"
-	"ticketmaster/internal/store"
+	"ticketmaster/internal/store/core"
 )
 
 // doRegister creates an account with the given role. The role always comes from
@@ -19,7 +19,7 @@ func (d *Deps) RegisterAccount(w http.ResponseWriter, r *http.Request, role stri
 	}
 	u.Role = role
 	if err := d.Store.Register(&u); err != nil {
-		if errors.Is(err, store.ErrDuplicate) {
+		if errors.Is(err, core.ErrDuplicate) {
 			Fail(w, http.StatusConflict, "email already registered")
 			return
 		}

@@ -16,7 +16,7 @@ func (h *Handlers) CreateEvent(w http.ResponseWriter, r *http.Request) {
 		web.Fail(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if err := h.Store.CreateEvent(&e); err != nil {
+	if err := h.AdminStore.CreateEvent(&e); err != nil {
 		web.ServerError(w, err)
 		return
 	}
@@ -45,7 +45,7 @@ func (h *Handlers) UpdateEvent(w http.ResponseWriter, r *http.Request) {
 		web.Fail(w, http.StatusBadRequest, "ticketsTotal is below the number already sold")
 		return
 	}
-	if err := h.Store.UpdateEvent(e); err != nil {
+	if err := h.AdminStore.UpdateEvent(e); err != nil {
 		web.ServerError(w, err)
 		return
 	}
@@ -56,7 +56,7 @@ func (h *Handlers) DeleteEvent(w http.ResponseWriter, r *http.Request) {
 	if h.AdminAuth(w, r) == nil {
 		return
 	}
-	h.Deleted(w, h.Store.DeleteEvent(r.PathValue("id")), "event",
+	h.Deleted(w, h.AdminStore.DeleteEvent(r.PathValue("id")), "event",
 		"event has confirmed bookings: cancel those first")
 }
 
@@ -69,7 +69,7 @@ func (h *Handlers) CreateVenue(w http.ResponseWriter, r *http.Request) {
 		web.Fail(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if err := h.Store.CreateVenue(&v); err != nil {
+	if err := h.AdminStore.CreateVenue(&v); err != nil {
 		web.ServerError(w, err)
 		return
 	}
@@ -91,7 +91,7 @@ func (h *Handlers) UpdateVenue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v.ID = id
-	if err := h.Store.UpdateVenue(v); err != nil {
+	if err := h.AdminStore.UpdateVenue(v); err != nil {
 		web.ServerError(w, err)
 		return
 	}
@@ -102,7 +102,7 @@ func (h *Handlers) DeleteVenue(w http.ResponseWriter, r *http.Request) {
 	if h.AdminAuth(w, r) == nil {
 		return
 	}
-	h.Deleted(w, h.Store.DeleteVenue(r.PathValue("id")), "venue",
+	h.Deleted(w, h.AdminStore.DeleteVenue(r.PathValue("id")), "venue",
 		"venue still hosts events: move or delete those first")
 }
 
@@ -115,7 +115,7 @@ func (h *Handlers) CreateAttraction(w http.ResponseWriter, r *http.Request) {
 		web.Fail(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if err := h.Store.CreateAttraction(&a); err != nil {
+	if err := h.AdminStore.CreateAttraction(&a); err != nil {
 		web.ServerError(w, err)
 		return
 	}
@@ -137,7 +137,7 @@ func (h *Handlers) UpdateAttraction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.ID = id
-	if err := h.Store.UpdateAttraction(a); err != nil {
+	if err := h.AdminStore.UpdateAttraction(a); err != nil {
 		web.ServerError(w, err)
 		return
 	}
@@ -148,7 +148,7 @@ func (h *Handlers) DeleteAttraction(w http.ResponseWriter, r *http.Request) {
 	if h.AdminAuth(w, r) == nil {
 		return
 	}
-	h.Deleted(w, h.Store.DeleteAttraction(r.PathValue("id")), "attraction",
+	h.Deleted(w, h.AdminStore.DeleteAttraction(r.PathValue("id")), "attraction",
 		"attraction is still listed on events: remove it from those first")
 }
 
@@ -161,7 +161,7 @@ func (h *Handlers) CreateClassification(w http.ResponseWriter, r *http.Request) 
 		web.Fail(w, http.StatusBadRequest, "segment required")
 		return
 	}
-	if err := h.Store.CreateClassification(&c); err != nil {
+	if err := h.AdminStore.CreateClassification(&c); err != nil {
 		web.ServerError(w, err)
 		return
 	}
@@ -183,7 +183,7 @@ func (h *Handlers) UpdateClassification(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	c.ID = id
-	if err := h.Store.UpdateClassification(c); err != nil {
+	if err := h.AdminStore.UpdateClassification(c); err != nil {
 		web.ServerError(w, err)
 		return
 	}
@@ -194,6 +194,6 @@ func (h *Handlers) DeleteClassification(w http.ResponseWriter, r *http.Request) 
 	if h.AdminAuth(w, r) == nil {
 		return
 	}
-	h.Deleted(w, h.Store.DeleteClassification(r.PathValue("id")), "classification",
+	h.Deleted(w, h.AdminStore.DeleteClassification(r.PathValue("id")), "classification",
 		"classification is still used by events or attractions: reassign those first")
 }

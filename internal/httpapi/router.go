@@ -25,14 +25,16 @@ import (
 	"ticketmaster/internal/httpapi/admin"
 	"ticketmaster/internal/httpapi/user"
 	"ticketmaster/internal/httpapi/web"
-	"ticketmaster/internal/store"
+	adminstore "ticketmaster/internal/store/admin"
+	"ticketmaster/internal/store/core"
+	userstore "ticketmaster/internal/store/user"
 )
 
 // New builds the fully-wired API handler. Used by both the local dev server
 // (main.go) and the Vercel serverless entrypoint (api/index.go).
 func New() (http.Handler, error) {
 	config.Load(".env") // no-op when the file is absent (e.g. on Vercel)
-	st, err := store.NewStore(config.Get("MONGO_URI", "mongodb://localhost:27017"), config.Get("DB_NAME", "ticketmaster"))
+	st, err := core.NewStore(config.Get("MONGO_URI", "mongodb://localhost:27017"), config.Get("DB_NAME", "ticketmaster"))
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +54,8 @@ func New() (http.Handler, error) {
 		log.Println("warning: rate limiting is disabled (RATE_LIMIT_ATTEMPTS=0)")
 	}
 	deps := &web.Deps{Store: st, Limiter: web.NewLimiter(limit, window)}
-	u, a := user.New(deps), admin.New(deps)
+	u := user.New(deps, userstore.New(st))
+	a := admin.New(deps, adminstore.New(st))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {

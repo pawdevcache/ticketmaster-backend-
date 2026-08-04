@@ -1,7 +1,8 @@
-package store
+package admin
 
 import (
 	"ticketmaster/internal/models"
+	"ticketmaster/internal/store/core"
 
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -42,9 +43,9 @@ func (s *Store) Analytics(topEvents int) (*models.Analytics, error) {
 
 // revenueByEvent totals confirmed revenue per event, highest first.
 func (s *Store) revenueByEvent(limit int) ([]models.EventRevenue, error) {
-	cx, cancel := ctx()
+	cx, cancel := core.Ctx()
 	defer cancel()
-	cur, err := s.bookings.Aggregate(cx, []bson.D{
+	cur, err := s.BookingsCol.Aggregate(cx, []bson.D{
 		{{Key: "$match", Value: bson.D{{Key: "status", Value: "confirmed"}}}},
 		{{Key: "$group", Value: bson.D{
 			{Key: "_id", Value: "$eventId"},
@@ -83,9 +84,9 @@ func (s *Store) revenueByEvent(limit int) ([]models.EventRevenue, error) {
 // ticketsByCategory totals confirmed tickets per classification. Bookings
 // reach a category through their event, so this joins twice.
 func (s *Store) ticketsByCategory() ([]models.CategoryTickets, error) {
-	cx, cancel := ctx()
+	cx, cancel := core.Ctx()
 	defer cancel()
-	cur, err := s.bookings.Aggregate(cx, []bson.D{
+	cur, err := s.BookingsCol.Aggregate(cx, []bson.D{
 		{{Key: "$match", Value: bson.D{{Key: "status", Value: "confirmed"}}}},
 		{{Key: "$lookup", Value: bson.D{
 			{Key: "from", Value: "events"},
