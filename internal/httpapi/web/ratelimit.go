@@ -1,4 +1,4 @@
-package httpapi
+package web
 
 import (
 	"net"
@@ -19,14 +19,14 @@ const (
 	defaultRateWindow = 15 * time.Minute
 )
 
-// limiter is a sliding-window counter keyed by caller.
+// Limiter is a sliding-window counter keyed by caller.
 //
 // State lives in this process only. Behind a single server that is exactly
 // right; across several instances — Vercel spins one up per concurrent
 // request — each keeps its own counter, so the effective limit multiplies by
 // the instance count. It still bounds an attacker, but a deployment that needs
 // a hard global limit wants the counters in MongoDB instead.
-type limiter struct {
+type Limiter struct {
 	mu     sync.Mutex
 	hits   map[string][]time.Time
 	limit  int
@@ -34,14 +34,14 @@ type limiter struct {
 	swept  time.Time
 }
 
-func newLimiter(limit int, window time.Duration) *limiter {
-	return &limiter{hits: map[string][]time.Time{}, limit: limit, window: window}
+func NewLimiter(limit int, window time.Duration) *Limiter {
+	return &Limiter{hits: map[string][]time.Time{}, limit: limit, window: window}
 }
 
 // allow records an attempt and reports whether it is permitted. When it is
 // not, it also returns how long the caller should wait — the time until the
 // oldest attempt in the window ages out.
-func (l *limiter) allow(key string, now time.Time) (bool, time.Duration) {
+func (l *Limiter) Allow(key string, now time.Time) (bool, time.Duration) {
 	if l.limit <= 0 {
 		return true, 0 // disabled
 	}
@@ -69,7 +69,7 @@ func (l *limiter) allow(key string, now time.Time) (bool, time.Duration) {
 // sweep drops keys whose attempts have all aged out. Without it the map grows
 // with every distinct address seen, which would turn the defence into a slow
 // memory leak. Called under the mutex, at most once per window.
-func (l *limiter) sweep(now time.Time) {
+func (l *Limiter) sweep(now time.Time) {
 	if now.Sub(l.swept) < l.window {
 		return
 	}
@@ -82,16 +82,16 @@ func (l *limiter) sweep(now time.Time) {
 	}
 }
 
-// rateLimited wraps a handler so repeated calls from one caller are rejected
+// RateLimited wraps a handler so repeated calls from one caller are rejected
 // with 429. The name separates buckets, so exhausting login attempts does not
 // also block registration.
-func (s *Server) rateLimited(name string, h http.HandlerFunc) http.HandlerFunc {
+func (d *Deps) RateLimited(name string, h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ok, retryAfter := s.limiter.allow(name+"|"+clientIP(r), time.Now())
+		ok, retryAfter := d.Limiter.Allow(name+"|"+ClientIP(r), time.Now())
 		if !ok {
 			secs := int(retryAfter.Seconds()) + 1
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
-			fail(w, http.StatusTooManyRequests,
+			Fail(w, http.StatusTooManyRequests,
 				"too many attempts, try again in "+strconv.Itoa(secs)+" seconds")
 			return
 		}
@@ -99,7 +99,7 @@ func (s *Server) rateLimited(name string, h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// clientIP identifies the caller.
+// ClientIP identifies the caller.
 //
 // Render and Vercel both terminate TLS in front of the application, so
 // RemoteAddr is the proxy and every user would share one bucket. The
@@ -109,7 +109,7 @@ func (s *Server) rateLimited(name string, h http.HandlerFunc) http.HandlerFunc {
 // directly — not through the platform's proxy — can rotate it and evade the
 // limit. Exposing this service without a proxy in front weakens the defence to
 // that extent.
-func clientIP(r *http.Request) string {
+func ClientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		first, _, _ := strings.Cut(xff, ",")
 		if ip := strings.TrimSpace(first); ip != "" {
@@ -122,9 +122,9 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// rateLimitSettings reads the configured limit and window, falling back to the
+// RateLimitSettings reads the configured limit and window, falling back to the
 // defaults. A limit of 0 disables rate limiting entirely.
-func rateLimitSettings() (int, time.Duration) {
+func RateLimitSettings() (int, time.Duration) {
 	limit := defaultRateLimit
 	if n, err := strconv.Atoi(config.Get("RATE_LIMIT_ATTEMPTS", "")); err == nil && n >= 0 {
 		limit = n

@@ -1,20 +1,20 @@
-// Package httpapi is the HTTP layer: routing, request decoding, authorisation
-// and response shaping. It is the only package that knows about status codes.
+// Package httpapi wires the HTTP layer together. It owns the route table and
+// nothing else: the handlers live in sub-packages, split by who may call them.
 //
-// Routes fall into three tiers, which is the thing to keep straight when
-// adding one:
+//   - web   — shared plumbing: dependencies, auth, responses, paging, limiting
+//   - user  — public catalogue reads, sign-up and sign-in, a customer's own
+//     bookings
+//   - admin — catalogue writes, account management, all bookings, analytics
 //
-//   - public — discovery reads, register, login, the forgotten-password pair
-//   - user   — needs a bearer token; a user only ever sees their own records
-//   - admin  — needs a token belonging to an admin account (see adminAuth)
+// The split is the access tier made structural. Every route registered from
+// the admin package requires an administrator, so reading this file tells you
+// who can reach what without opening a single handler.
 //
-// Every write to a discovery resource is admin-only, including the create
-// routes that share a path with a public read.
-//
-// Updates are deliberately partial. PUT and PATCH share a handler that decodes
-// the request over the record already in the database, so a body needs only
-// the fields that change — and any field the client must not control is put
-// back afterwards.
+// Two conventions run through the table below. Every write to a discovery
+// resource is admin-only, even where it shares a path with a public read. And
+// PUT and PATCH share a handler: both apply a partial update, decoding the
+// request over the stored record, so a body carries only the fields that
+// change.
 package httpapi
 
 import (
@@ -22,6 +22,9 @@ import (
 	"net/http"
 
 	"ticketmaster/internal/config"
+	"ticketmaster/internal/httpapi/admin"
+	"ticketmaster/internal/httpapi/user"
+	"ticketmaster/internal/httpapi/web"
 	"ticketmaster/internal/store"
 )
 
@@ -44,19 +47,20 @@ func New() (http.Handler, error) {
 	}
 	// Rate limiting protects the endpoints where a guess is worth something:
 	// credentials and password recovery.
-	limit, window := rateLimitSettings()
+	limit, window := web.RateLimitSettings()
 	if limit <= 0 {
 		log.Println("warning: rate limiting is disabled (RATE_LIMIT_ATTEMPTS=0)")
 	}
-	s := &Server{store: st, limiter: newLimiter(limit, window)}
+	deps := &web.Deps{Store: st, Limiter: web.NewLimiter(limit, window)}
+	u, a := user.New(deps), admin.New(deps)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		if err := st.Ping(); err != nil {
-			writeJSON(w, 200, map[string]string{"status": "degraded", "db": "disconnected", "error": err.Error()})
+			web.WriteJSON(w, 200, map[string]string{"status": "degraded", "db": "disconnected", "error": err.Error()})
 			return
 		}
-		writeJSON(w, 200, map[string]string{"status": "ok", "db": "connected"})
+		web.WriteJSON(w, 200, map[string]string{"status": "ok", "db": "connected"})
 	})
 
 	// API reference. /docs is the human-readable page; /openapi.yaml is the
@@ -66,7 +70,7 @@ func New() (http.Handler, error) {
 
 	// Root: {$} matches only the exact "/" path, so real unknown routes still 404.
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, 200, map[string]any{
+		web.WriteJSON(w, 200, map[string]any{
 			"service": "Ticketmaster API",
 			"status":  "running",
 			"endpoints": map[string][]string{
@@ -97,17 +101,16 @@ func New() (http.Handler, error) {
 		})
 	})
 
-	// Discovery API. Reads are public; every write requires an admin token.
-	// PUT and PATCH share a handler: both apply a partial update, so a body
-	// only needs the fields that actually change.
+	// Discovery API. The reads come from the user package, the writes from the
+	// admin package — the tier of every route is visible in this table.
 	for _, res := range []struct {
 		path                             string
 		search, get, create, update, del http.HandlerFunc
 	}{
-		{"events", s.searchEvents, s.getEvent, s.createEvent, s.updateEvent, s.deleteEvent},
-		{"venues", s.searchVenues, s.getVenue, s.createVenue, s.updateVenue, s.deleteVenue},
-		{"attractions", s.searchAttractions, s.getAttraction, s.createAttraction, s.updateAttraction, s.deleteAttraction},
-		{"classifications", s.searchClassifications, s.getClassification, s.createClassification, s.updateClassification, s.deleteClassification},
+		{"events", u.SearchEvents, u.GetEvent, a.CreateEvent, a.UpdateEvent, a.DeleteEvent},
+		{"venues", u.SearchVenues, u.GetVenue, a.CreateVenue, a.UpdateVenue, a.DeleteVenue},
+		{"attractions", u.SearchAttractions, u.GetAttraction, a.CreateAttraction, a.UpdateAttraction, a.DeleteAttraction},
+		{"classifications", u.SearchClassifications, u.GetClassification, a.CreateClassification, a.UpdateClassification, a.DeleteClassification},
 	} {
 		base := "/discovery/v2/" + res.path
 		mux.HandleFunc("GET "+base, res.search)
@@ -120,38 +123,38 @@ func New() (http.Handler, error) {
 
 	// Ticketing / commerce. Each rate-limited route gets its own bucket, so
 	// exhausting login attempts does not also lock out registration.
-	mux.HandleFunc("POST /api/register", s.rateLimited("register", s.register))
-	mux.HandleFunc("POST /api/login", s.rateLimited("login", s.login))
+	mux.HandleFunc("POST /api/register", deps.RateLimited("register", u.Register))
+	mux.HandleFunc("POST /api/login", deps.RateLimited("login", u.Login))
 	// Not rate-limited: ending your own session must always be possible.
-	mux.HandleFunc("POST /api/logout", s.logout)
+	mux.HandleFunc("POST /api/logout", u.Logout)
 	// Forgotten-password flow: request a token, then trade it for a new password.
-	mux.HandleFunc("POST /api/forgot-password", s.rateLimited("forgot-password", s.forgotPassword))
-	mux.HandleFunc("POST /api/reset-password", s.rateLimited("reset-password", s.resetPassword))
+	mux.HandleFunc("POST /api/forgot-password", deps.RateLimited("forgot-password", u.ForgotPassword))
+	mux.HandleFunc("POST /api/reset-password", deps.RateLimited("reset-password", u.ResetPassword))
+
+	mux.HandleFunc("POST /api/bookings", u.CreateBooking)
+	mux.HandleFunc("GET /api/bookings", u.ListBookings)
+	mux.HandleFunc("GET /api/bookings/{id}", u.GetBooking)
+	mux.HandleFunc("DELETE /api/bookings/{id}", u.CancelBooking)
 
 	// Admin accounts. Registration needs ADMIN_REGISTRATION_KEY; the resulting token
 	// is what the POST /discovery/v2/* create routes require.
-	mux.HandleFunc("POST /api/admin/register", s.rateLimited("admin-register", s.adminRegister))
-	mux.HandleFunc("POST /api/admin/login", s.rateLimited("admin-login", s.adminLogin))
-	mux.HandleFunc("GET /api/admin/me", s.adminMe)
+	mux.HandleFunc("POST /api/admin/register", deps.RateLimited("admin-register", a.Register))
+	mux.HandleFunc("POST /api/admin/login", deps.RateLimited("admin-login", a.Login))
+	mux.HandleFunc("GET /api/admin/me", a.Me)
 
 	// Dashboard figures for the admin Overview tab.
-	mux.HandleFunc("GET /api/admin/analytics", s.adminAnalytics)
+	mux.HandleFunc("GET /api/admin/analytics", a.Analytics)
 
 	// Admin management of accounts and of every user's bookings.
-	mux.HandleFunc("GET /api/admin/users", s.adminListUsers)
-	mux.HandleFunc("GET /api/admin/users/{id}", s.adminGetUser)
-	mux.HandleFunc("PUT /api/admin/users/{id}", s.adminUpdateUser)
-	mux.HandleFunc("PATCH /api/admin/users/{id}", s.adminUpdateUser)
-	mux.HandleFunc("DELETE /api/admin/users/{id}", s.adminDeleteUser)
-	mux.HandleFunc("GET /api/admin/bookings", s.adminListBookings)
-	mux.HandleFunc("GET /api/admin/bookings/{id}", s.adminGetBooking)
-	mux.HandleFunc("POST /api/admin/bookings/{id}/cancel", s.adminCancelBooking)
-	mux.HandleFunc("DELETE /api/admin/bookings/{id}", s.adminDeleteBooking)
-
-	mux.HandleFunc("POST /api/bookings", s.createBooking)
-	mux.HandleFunc("GET /api/bookings", s.listBookings)
-	mux.HandleFunc("GET /api/bookings/{id}", s.getBooking)
-	mux.HandleFunc("DELETE /api/bookings/{id}", s.cancelBooking)
+	mux.HandleFunc("GET /api/admin/users", a.ListUsers)
+	mux.HandleFunc("GET /api/admin/users/{id}", a.GetUser)
+	mux.HandleFunc("PUT /api/admin/users/{id}", a.UpdateUser)
+	mux.HandleFunc("PATCH /api/admin/users/{id}", a.UpdateUser)
+	mux.HandleFunc("DELETE /api/admin/users/{id}", a.DeleteUser)
+	mux.HandleFunc("GET /api/admin/bookings", a.ListBookings)
+	mux.HandleFunc("GET /api/admin/bookings/{id}", a.GetBooking)
+	mux.HandleFunc("POST /api/admin/bookings/{id}/cancel", a.CancelBooking)
+	mux.HandleFunc("DELETE /api/admin/bookings/{id}", a.DeleteBooking)
 
 	return cors(mux), nil
 }

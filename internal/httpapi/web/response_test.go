@@ -1,4 +1,4 @@
-package httpapi
+package web
 
 import (
 	"encoding/json"
@@ -28,7 +28,7 @@ func TestWritePageEnvelope(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			writePage(rec, "things", tc.items, tc.total, tc.page)
+			WritePage(rec, "things", tc.items, tc.total, tc.page)
 
 			var got struct {
 				Embedded map[string][]string `json:"_embedded"`
@@ -57,13 +57,13 @@ func TestWritePageEnvelope(t *testing.T) {
 // the array without a nil check.
 func TestWritePageEmptyIsArrayNotNull(t *testing.T) {
 	rec := httptest.NewRecorder()
-	writePage(rec, "things", []string{}, 0, store.Page{Number: 0, Size: 20})
+	WritePage(rec, "things", []string{}, 0, store.Page{Number: 0, Size: 20})
 	if body := rec.Body.String(); !contains(body, `"things":[]`) {
 		t.Errorf("empty page did not serialise as []: %s", body)
 	}
 }
 
-// pageParams must clamp an abusive size before it reaches the database.
+// PageParams must clamp an abusive size before it reaches the database.
 func TestPageParamsClampsSize(t *testing.T) {
 	for _, tc := range []struct {
 		query    string
@@ -77,9 +77,9 @@ func TestPageParamsClampsSize(t *testing.T) {
 		{"?size=abc", store.DefaultPageSize, 0},
 		{"?page=-4", store.DefaultPageSize, 0},
 	} {
-		p := pageParams(httptest.NewRequest("GET", "/x"+tc.query, nil))
+		p := PageParams(httptest.NewRequest("GET", "/x"+tc.query, nil))
 		if p.Size != tc.wantSize || p.Number != tc.wantNum {
-			t.Errorf("pageParams(%q) = {Number:%d Size:%d}, want {Number:%d Size:%d}",
+			t.Errorf("PageParams(%q) = {Number:%d Size:%d}, want {Number:%d Size:%d}",
 				tc.query, p.Number, p.Size, tc.wantNum, tc.wantSize)
 		}
 	}

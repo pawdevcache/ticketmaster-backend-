@@ -1,4 +1,4 @@
-package httpapi
+package web
 
 import (
 	"net/http"
@@ -8,14 +8,14 @@ import (
 )
 
 func TestLimiterAllowsUpToLimitThenBlocks(t *testing.T) {
-	l := newLimiter(3, time.Minute)
+	l := NewLimiter(3, time.Minute)
 	now := time.Unix(1_700_000_000, 0)
 	for i := 1; i <= 3; i++ {
-		if ok, _ := l.allow("k", now); !ok {
+		if ok, _ := l.Allow("k", now); !ok {
 			t.Fatalf("attempt %d was blocked, want allowed", i)
 		}
 	}
-	ok, retry := l.allow("k", now)
+	ok, retry := l.Allow("k", now)
 	if ok {
 		t.Fatal("attempt 4 was allowed, want blocked")
 	}
@@ -27,52 +27,52 @@ func TestLimiterAllowsUpToLimitThenBlocks(t *testing.T) {
 // A blocked caller must not be able to push their own unlock time further away
 // by continuing to hammer the endpoint.
 func TestLimiterRejectedAttemptsDoNotExtendTheWindow(t *testing.T) {
-	l := newLimiter(2, time.Minute)
+	l := NewLimiter(2, time.Minute)
 	start := time.Unix(1_700_000_000, 0)
-	l.allow("k", start)
-	l.allow("k", start)
+	l.Allow("k", start)
+	l.Allow("k", start)
 
-	_, first := l.allow("k", start.Add(10*time.Second))
-	_, second := l.allow("k", start.Add(20*time.Second))
+	_, first := l.Allow("k", start.Add(10*time.Second))
+	_, second := l.Allow("k", start.Add(20*time.Second))
 	if second >= first {
 		t.Errorf("retryAfter grew from %v to %v while being hammered", first, second)
 	}
 }
 
 func TestLimiterWindowExpires(t *testing.T) {
-	l := newLimiter(2, time.Minute)
+	l := NewLimiter(2, time.Minute)
 	start := time.Unix(1_700_000_000, 0)
-	l.allow("k", start)
-	l.allow("k", start)
-	if ok, _ := l.allow("k", start.Add(time.Second)); ok {
+	l.Allow("k", start)
+	l.Allow("k", start)
+	if ok, _ := l.Allow("k", start.Add(time.Second)); ok {
 		t.Fatal("blocked attempt was allowed inside the window")
 	}
-	if ok, _ := l.allow("k", start.Add(61*time.Second)); !ok {
+	if ok, _ := l.Allow("k", start.Add(61*time.Second)); !ok {
 		t.Error("attempt after the window was blocked, want allowed")
 	}
 }
 
 // Buckets are per route and per caller: exhausting one must not affect another.
 func TestLimiterKeysAreIndependent(t *testing.T) {
-	l := newLimiter(1, time.Minute)
+	l := NewLimiter(1, time.Minute)
 	now := time.Unix(1_700_000_000, 0)
-	l.allow("login|1.1.1.1", now)
-	if ok, _ := l.allow("login|1.1.1.1", now); ok {
+	l.Allow("login|1.1.1.1", now)
+	if ok, _ := l.Allow("login|1.1.1.1", now); ok {
 		t.Error("same key was allowed twice with limit 1")
 	}
-	if ok, _ := l.allow("login|2.2.2.2", now); !ok {
+	if ok, _ := l.Allow("login|2.2.2.2", now); !ok {
 		t.Error("a different caller was blocked")
 	}
-	if ok, _ := l.allow("register|1.1.1.1", now); !ok {
+	if ok, _ := l.Allow("register|1.1.1.1", now); !ok {
 		t.Error("a different route was blocked for the same caller")
 	}
 }
 
 func TestLimiterDisabledWhenLimitIsZero(t *testing.T) {
-	l := newLimiter(0, time.Minute)
+	l := NewLimiter(0, time.Minute)
 	now := time.Unix(1_700_000_000, 0)
 	for i := 0; i < 100; i++ {
-		if ok, _ := l.allow("k", now); !ok {
+		if ok, _ := l.Allow("k", now); !ok {
 			t.Fatalf("attempt %d blocked while rate limiting is disabled", i)
 		}
 	}
@@ -81,16 +81,16 @@ func TestLimiterDisabledWhenLimitIsZero(t *testing.T) {
 // Without pruning, the map grows with every distinct address ever seen — the
 // defence would become a slow memory leak.
 func TestLimiterSweepsExpiredKeys(t *testing.T) {
-	l := newLimiter(5, time.Minute)
+	l := NewLimiter(5, time.Minute)
 	start := time.Unix(1_700_000_000, 0)
 	for _, k := range []string{"a", "b", "c"} {
-		l.allow(k, start)
+		l.Allow(k, start)
 	}
 	if len(l.hits) != 3 {
 		t.Fatalf("map holds %d keys, want 3", len(l.hits))
 	}
 	// One new attempt a full window later should clear the stale keys.
-	l.allow("d", start.Add(2*time.Minute))
+	l.Allow("d", start.Add(2*time.Minute))
 	if len(l.hits) != 1 {
 		t.Errorf("map holds %d keys after sweep, want 1", len(l.hits))
 	}
@@ -117,17 +117,17 @@ func TestClientIP(t *testing.T) {
 			if tc.xff != "" {
 				r.Header.Set("X-Forwarded-For", tc.xff)
 			}
-			if got := clientIP(r); got != tc.want {
-				t.Errorf("clientIP() = %q, want %q", got, tc.want)
+			if got := ClientIP(r); got != tc.want {
+				t.Errorf("ClientIP() = %q, want %q", got, tc.want)
 			}
 		})
 	}
 }
 
 func TestRateLimitedHandlerReturns429WithRetryAfter(t *testing.T) {
-	s := &Server{limiter: newLimiter(1, time.Minute)}
+	s := &Deps{Limiter: NewLimiter(1, time.Minute)}
 	calls := 0
-	h := s.rateLimited("login", func(w http.ResponseWriter, r *http.Request) {
+	h := s.RateLimited("login", func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.WriteHeader(http.StatusOK)
 	})
@@ -158,24 +158,24 @@ func TestRateLimitedHandlerReturns429WithRetryAfter(t *testing.T) {
 func TestRateLimitSettingsDefaults(t *testing.T) {
 	t.Setenv("RATE_LIMIT_ATTEMPTS", "")
 	t.Setenv("RATE_LIMIT_WINDOW", "")
-	if limit, window := rateLimitSettings(); limit != defaultRateLimit || window != defaultRateWindow {
+	if limit, window := RateLimitSettings(); limit != defaultRateLimit || window != defaultRateWindow {
 		t.Errorf("defaults = %d/%v, want %d/%v", limit, window, defaultRateLimit, defaultRateWindow)
 	}
 
 	t.Setenv("RATE_LIMIT_ATTEMPTS", "3")
 	t.Setenv("RATE_LIMIT_WINDOW", "30s")
-	if limit, window := rateLimitSettings(); limit != 3 || window != 30*time.Second {
+	if limit, window := RateLimitSettings(); limit != 3 || window != 30*time.Second {
 		t.Errorf("overrides = %d/%v, want 3/30s", limit, window)
 	}
 
 	t.Setenv("RATE_LIMIT_ATTEMPTS", "nonsense")
 	t.Setenv("RATE_LIMIT_WINDOW", "nonsense")
-	if limit, window := rateLimitSettings(); limit != defaultRateLimit || window != defaultRateWindow {
+	if limit, window := RateLimitSettings(); limit != defaultRateLimit || window != defaultRateWindow {
 		t.Errorf("unparseable values = %d/%v, want the defaults", limit, window)
 	}
 
 	t.Setenv("RATE_LIMIT_ATTEMPTS", "0")
-	if limit, _ := rateLimitSettings(); limit != 0 {
+	if limit, _ := RateLimitSettings(); limit != 0 {
 		t.Errorf("limit = %d, want 0 so rate limiting can be turned off", limit)
 	}
 }
