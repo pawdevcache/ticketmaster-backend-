@@ -107,11 +107,52 @@ func (s *Store) EnsureIndexes() error {
 	}); err != nil {
 		return err
 	}
-	_, err := s.ResetsCol.Indexes().CreateOne(cx, mongo.IndexModel{
+	if _, err := s.ResetsCol.Indexes().CreateOne(cx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "createdAt", Value: 1}},
 		Options: options.Index().SetExpireAfterSeconds(int32(ResetTTL.Seconds())),
+	}); err != nil {
+		return err
+	}
+	// Ticket codes are looked up on every scan, and a duplicate would let one
+	// scan admit the wrong booking. Sparse, because bookings made before
+	// ticket codes existed have no value to index.
+	_, err := s.BookingsCol.Indexes().CreateOne(cx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "ticketCode", Value: 1}},
+		Options: options.Index().SetUnique(true).SetSparse(true),
 	})
 	return err
+}
+
+// EnsureTicketCodes gives a ticket code to bookings created before codes
+// existed, so their QR codes still scan. Best-effort and called once at
+// startup, like the other Ensure funcs; after the first run it matches
+// nothing and costs a single indexed query.
+func (s *Store) EnsureTicketCodes() (int, error) {
+	cx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cur, err := s.BookingsCol.Find(cx,
+		bson.D{{Key: "ticketCode", Value: bson.D{{Key: "$exists", Value: false}}}},
+		options.Find().SetProjection(bson.D{{Key: "_id", Value: 1}}))
+	if err != nil {
+		return 0, err
+	}
+	var rows []struct {
+		ID string `bson:"_id"`
+	}
+	if err := cur.All(cx, &rows); err != nil {
+		return 0, err
+	}
+	for _, r := range rows {
+		code, err := NewTicketCode()
+		if err != nil {
+			return 0, err
+		}
+		if _, err := s.BookingsCol.UpdateByID(cx, r.ID,
+			bson.D{{Key: "$set", Value: bson.D{{Key: "ticketCode", Value: code}}}}); err != nil {
+			return 0, err
+		}
+	}
+	return len(rows), nil
 }
 
 // EnsureAdmin seeds a bootstrap admin so there is someone to sign in as before

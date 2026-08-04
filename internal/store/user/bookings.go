@@ -44,9 +44,18 @@ func (s *Store) Book(userID, eventID string, qty int) (*models.Booking, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The seats are already reserved at this point, so a failure here would
+	// leave them held against no booking. Generating the code is local and
+	// cannot fail short of the OS running out of entropy, but check anyway
+	// rather than issue a ticket nobody can scan.
+	code, err := core.NewTicketCode()
+	if err != nil {
+		return nil, err
+	}
 	b := &models.Booking{
 		ID: core.NewID(), UserID: userID, EventID: eventID, Quantity: qty,
 		Total: e.PriceMin * float64(qty), Status: "confirmed", CreatedAt: time.Now(),
+		TicketCode: code,
 	}
 	if err := core.Insert(s.BookingsCol, b); err != nil {
 		return nil, err

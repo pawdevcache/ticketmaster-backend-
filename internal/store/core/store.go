@@ -132,6 +132,19 @@ func NewSecret() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// NewTicketCode returns the value a ticket's QR code carries.
+//
+// 128 bits of randomness: unguessable, but half the length of NewSecret, which
+// matters when it has to survive being printed as a QR code and scanned from a
+// phone screen at a door.
+func NewTicketCode() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
 // maxSearchLen bounds a search term. Escaping stops a pattern from
 // backtracking, but a megabyte-long literal still makes Mongo compare a
 // megabyte against every document in the collection.

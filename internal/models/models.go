@@ -88,6 +88,15 @@ type Booking struct {
 	Status    string    `json:"status" bson:"status"` // confirmed, cancelled
 	CreatedAt time.Time `json:"createdAt" bson:"createdAt"`
 
+	// TicketCode is what the QR encodes and what check-in consumes. It is a
+	// server-generated random value rather than the booking id, because ids
+	// are ObjectIDs — a timestamp plus a counter and only a few bytes of
+	// randomness — and anything a stranger can guess is a forgeable ticket.
+	TicketCode string `json:"ticketCode,omitempty" bson:"ticketCode,omitempty"`
+	// CheckedInAt is set the first time the ticket is scanned at the door.
+	// nil means unused; it is never cleared, so a ticket admits once.
+	CheckedInAt *time.Time `json:"checkedInAt,omitempty" bson:"checkedInAt,omitempty"`
+
 	// Event is filled in when a booking is read, so a client can render a
 	// ticket without fetching each event separately. bson:"-" keeps it out of
 	// the stored document — it is a view of the events collection, not a copy,

@@ -140,6 +140,36 @@ ck "  total = qty x priceMin"    yes "$(has "$BK" '"total":165')"
 ck "DELETE /api/bookings/{id}"   200 "$(code -X DELETE $B/api/bookings/$BID -H "$UH")"
 ck "  cancel returns the booking" yes "$(has "$(body $B/api/bookings/$BID -H "$UH")" '"status":"cancelled"')"
 
+echo "=== 7b. ticket check-in (1 route) ==="
+CIB=$(body -X POST $B/api/bookings -H "$UH" -H "$J" -d "{\"eventId\":\"$EID\",\"quantity\":1}")
+CODE=$(echo "$CIB" | grep -oE '"ticketCode":"[a-f0-9]+"' | sed 's/"ticketCode":"//; s/"//')
+ck "  booking carries a ticket code"     32 "${#CODE}"
+ck "  code is not the booking id"        no "$(has "$CODE" "$(echo "$CIB" | id)")"
+ck "POST /api/admin/tickets/check-in"    200 "$(code -X POST $B/api/admin/tickets/check-in -H "$AH" -H "$J" -d "{\"code\":\"$CODE\"}")"
+ck "  second scan is refused"            409 "$(code -X POST $B/api/admin/tickets/check-in -H "$AH" -H "$J" -d "{\"code\":\"$CODE\"}")"
+ck "  says which refusal"                yes "$(has "$(body -X POST $B/api/admin/tickets/check-in -H "$AH" -H "$J" -d "{\"code\":\"$CODE\"}")" 'already_used')"
+ck "  checkedInAt is stamped"            yes "$(has "$(body $B/api/bookings -H "$UH")" '"checkedInAt"')"
+ck "  unknown code -> 404"               404 "$(code -X POST $B/api/admin/tickets/check-in -H "$AH" -H "$J" -d '{"code":"deadbeefdeadbeefdeadbeefdeadbeef"}')"
+ck "  missing code -> 400"               400 "$(code -X POST $B/api/admin/tickets/check-in -H "$AH" -H "$J" -d '{}')"
+ck "  check-in needs an admin"           403 "$(code -X POST $B/api/admin/tickets/check-in -H "$UH" -H "$J" -d "{\"code\":\"$CODE\"}")"
+CANB=$(body -X POST $B/api/bookings -H "$UH" -H "$J" -d "{\"eventId\":\"$EID\",\"quantity\":1}")
+CANCODE=$(echo "$CANB" | grep -oE '"ticketCode":"[a-f0-9]+"' | sed 's/"ticketCode":"//; s/"//')
+curl -s -m 30 -o /dev/null -X DELETE $B/api/bookings/$(echo "$CANB" | id) -H "$UH"
+ck "  cancelled ticket refused"          409 "$(code -X POST $B/api/admin/tickets/check-in -H "$AH" -H "$J" -d "{\"code\":\"$CANCODE\"}")"
+# Two doors scanning the same ticket at once must not both admit.
+RB=$(body -X POST $B/api/bookings -H "$UH" -H "$J" -d "{\"eventId\":\"$EID\",\"quantity\":1}")
+RCODE=$(echo "$RB" | grep -oE '"ticketCode":"[a-f0-9]+"' | sed 's/"ticketCode":"//; s/"//')
+# curl -w prints no trailing newline, so each result needs its own line or
+# they concatenate into one unsearchable string.
+RACE=$(mktemp); : > "$RACE"
+for i in 1 2 3 4 5; do
+  { printf '%s\n' "$(code -X POST $B/api/admin/tickets/check-in -H "$AH" -H "$J" -d "{\"code\":\"$RCODE\"}")" >> "$RACE"; } &
+done
+wait
+ck "  concurrent scans admit exactly 1"  1 "$(grep -c '^200$' "$RACE")"
+ck "  the rest are refused"              4 "$(grep -c '^409$' "$RACE")"
+rm -f "$RACE"
+
 echo "=== 8. admin bookings (4 routes) ==="
 ck "GET /api/admin/bookings"     200 "$(code $B/api/admin/bookings -H "$AH")"
 AB=$(body "$B/api/admin/bookings?status=confirmed" -H "$AH")

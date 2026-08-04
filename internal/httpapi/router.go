@@ -47,6 +47,13 @@ func New() (http.Handler, error) {
 	if err := st.EnsureAdmin(config.Get("ADMIN_NAME", "Admin"), config.Get("ADMIN_EMAIL", ""), config.Get("ADMIN_PASSWORD", "")); err != nil {
 		log.Println("warning: could not seed admin user:", err)
 	}
+	// Tickets issued before check-in existed need a code, or their QR will not
+	// scan. Matches nothing after the first run.
+	if n, err := st.EnsureTicketCodes(); err != nil {
+		log.Println("warning: could not backfill ticket codes:", err)
+	} else if n > 0 {
+		log.Printf("assigned ticket codes to %d existing bookings", n)
+	}
 	// Rate limiting protects the endpoints where a guess is worth something:
 	// credentials and password recovery.
 	limit, window := web.RateLimitSettings()
@@ -94,7 +101,7 @@ func New() (http.Handler, error) {
 					"POST /discovery/v2/{events|venues|attractions|classifications}",
 					"PUT|PATCH /discovery/v2/{events|venues|attractions|classifications}/{id}",
 					"DELETE /discovery/v2/{events|venues|attractions|classifications}/{id}",
-					"GET /api/admin/analytics",
+					"GET /api/admin/analytics", "POST /api/admin/tickets/check-in",
 					"GET /api/admin/users", "GET /api/admin/users/{id}",
 					"PUT|PATCH /api/admin/users/{id}", "DELETE /api/admin/users/{id}",
 					"GET /api/admin/bookings", "GET /api/admin/bookings/{id}",
@@ -147,6 +154,9 @@ func New() (http.Handler, error) {
 
 	// Dashboard figures for the admin Overview tab.
 	mux.HandleFunc("GET /api/admin/analytics", a.Analytics)
+
+	// Gate check-in: scan a ticket QR code and admit its holder.
+	mux.HandleFunc("POST /api/admin/tickets/check-in", a.CheckIn)
 
 	// Admin management of accounts and of every user's bookings.
 	mux.HandleFunc("GET /api/admin/users", a.ListUsers)

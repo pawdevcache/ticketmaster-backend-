@@ -828,6 +828,68 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  # -------------------------------------------------------- admin: check-in
+
+  /api/admin/tickets/check-in:
+    post:
+      tags: [Admin — bookings]
+      summary: Admit a scanned ticket
+      description: |
+        Consumes the `ticketCode` a ticket's QR encodes and admits its holder.
+
+        The first scan succeeds and stamps `checkedInAt`; every later scan of
+        the same ticket is refused as `already_used`, so one ticket admits one
+        time. The stamp is applied with a single conditional update, so two
+        doors scanning simultaneously cannot both admit.
+
+        The code travels in the body rather than the path: it is the ticket's
+        only credential, and URLs end up in access logs and browser history.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  description: The ticketCode from the booking, as carried by the QR.
+                  example: 9f3c1d7a5b2e480c9a6f1e2d3c4b5a60
+      responses:
+        "200":
+          description: Admitted — first scan of a valid ticket
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckIn" }
+              example:
+                result: valid
+                message: admitted
+        "400":
+          description: No code supplied
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: No ticket matches that code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckIn" }
+              example:
+                result: not_found
+                message: no ticket matches that code
+        "409":
+          description: Already scanned, or the booking was cancelled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckIn" }
+              example:
+                result: already_used
+                message: this ticket has already been scanned
+
   # ----------------------------------------------------------- admin: users
 
   /api/admin/users:
@@ -1325,6 +1387,19 @@ components:
         total: { type: number, format: double, description: quantity × the event's priceMin }
         status: { type: string, enum: [confirmed, cancelled] }
         createdAt: { type: string, format: date-time, readOnly: true }
+        ticketCode:
+          type: string
+          readOnly: true
+          description: |
+            What the ticket's QR encodes and what check-in consumes. Server
+            generated and random — not derived from the id, which is an
+            ObjectID and therefore partly guessable.
+          example: 9f3c1d7a5b2e480c9a6f1e2d3c4b5a60
+        checkedInAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: When the ticket was scanned at the door. Absent until then, and never cleared.
         event:
           allOf:
             - $ref: "#/components/schemas/EventSummary"
@@ -1372,6 +1447,22 @@ components:
               genre: { type: string, example: Rock }
               tickets: { type: integer }
               revenue: { type: number, format: double }
+
+    CheckIn:
+      type: object
+      properties:
+        result:
+          type: string
+          enum: [valid, already_used, cancelled, not_found]
+          description: |
+            Why the scan was accepted or refused. `already_used` is kept
+            distinct from `not_found` so a door can tell a duplicated ticket
+            from a double scan of a genuine one.
+        message: { type: string, description: Wording a gate attendant can act on }
+        booking:
+          allOf:
+            - $ref: "#/components/schemas/Booking"
+          description: The ticket's booking, absent only when the code is unknown.
 
     Credentials:
       type: object
