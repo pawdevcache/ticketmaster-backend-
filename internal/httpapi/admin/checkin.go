@@ -41,7 +41,7 @@ func (h *Handlers) CheckIn(w http.ResponseWriter, r *http.Request) {
 	switch result {
 	case adminstore.CheckInUnknown:
 		status = http.StatusNotFound
-	case adminstore.CheckInUsed, adminstore.CheckInCancelled:
+	case adminstore.CheckInUsed, adminstore.CheckInCancelled, adminstore.CheckInUnpaid:
 		status = http.StatusConflict
 	}
 	out := map[string]any{"result": result, "message": checkInMessage(result)}
@@ -61,6 +61,8 @@ func checkInMessage(r adminstore.CheckInResult) string {
 		return "this ticket has already been scanned"
 	case adminstore.CheckInCancelled:
 		return "this booking was cancelled"
+	case adminstore.CheckInUnpaid:
+		return "this booking was never paid for"
 	default:
 		return "no ticket matches that code"
 	}

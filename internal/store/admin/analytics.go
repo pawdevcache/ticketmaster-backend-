@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"ticketmaster/internal/models"
 	adminmodels "ticketmaster/internal/models/admin"
 	"ticketmaster/internal/store/core"
 
@@ -46,7 +47,7 @@ func (s *Store) revenueByEvent(limit int) ([]adminmodels.EventRevenue, error) {
 	cx, cancel := core.Ctx()
 	defer cancel()
 	cur, err := s.BookingsCol.Aggregate(cx, []bson.D{
-		{{Key: "$match", Value: bson.D{{Key: "status", Value: "confirmed"}}}},
+		{{Key: "$match", Value: bson.D{{Key: "status", Value: models.BookingConfirmed}}}},
 		{{Key: "$group", Value: bson.D{
 			{Key: "_id", Value: "$eventId"},
 			{Key: "revenue", Value: bson.D{{Key: "$sum", Value: "$total"}}},
@@ -87,7 +88,7 @@ func (s *Store) ticketsByCategory() ([]adminmodels.CategoryTickets, error) {
 	cx, cancel := core.Ctx()
 	defer cancel()
 	cur, err := s.BookingsCol.Aggregate(cx, []bson.D{
-		{{Key: "$match", Value: bson.D{{Key: "status", Value: "confirmed"}}}},
+		{{Key: "$match", Value: bson.D{{Key: "status", Value: models.BookingConfirmed}}}},
 		{{Key: "$lookup", Value: bson.D{
 			{Key: "from", Value: "events"},
 			{Key: "localField", Value: "eventId"},

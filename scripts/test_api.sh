@@ -140,8 +140,40 @@ ck "  total = qty x priceMin"    yes "$(has "$BK" '"total":165')"
 ck "DELETE /api/bookings/{id}"   200 "$(code -X DELETE $B/api/bookings/$BID -H "$UH")"
 ck "  cancel returns the booking" yes "$(has "$(body $B/api/bookings/$BID -H "$UH")" '"status":"cancelled"')"
 
+echo "=== 7a. payments and holds (1 route) ==="
+# Only meaningful with PAYMENTS set; with payments off a booking confirms on
+# creation and there is nothing to pay.
+PAYSTATE=$(body $B/api/bookings -H "$UH" | grep -o '"status":"pending"' | head -1)
+if [ -z "$PAYSTATE" ]; then
+  sk "POST /api/bookings/{id}/pay" "payments are off (PAYMENTS=off)"
+  ck "  booking confirms immediately"  yes "$(has "$(body -X POST $B/api/bookings -H "$UH" -H "$J" -d "{\"eventId\":\"$EID\",\"quantity\":1}")" '"status":"confirmed"')"
+  ck "  pay endpoint answers 404"      404 "$(code -X POST $B/api/bookings/$BID/pay -H "$UH")"
+else
+  PB=$(body -X POST $B/api/bookings -H "$UH" -H "$J" -d "{\"eventId\":\"$EID\",\"quantity\":1}")
+  PBID=$(echo "$PB" | id)
+  ck "  booking is held, not sold"     yes "$(has "$PB" '"status":"pending"')"
+  ck "  a payment intent is issued"    yes "$(has "$PB" '"clientSecret"')"
+  ck "  unpaid hold is refused entry"  409 "$(code -X POST $B/api/admin/tickets/check-in -H "$AH" -H "$J" -d "{\"code\":\"$(echo "$PB" | grep -oE '"ticketCode":"[a-f0-9]+"' | sed 's/"ticketCode":"//; s/"//')\"}")"
+  ck "POST /api/bookings/{id}/pay"     200 "$(code -X POST $B/api/bookings/$PBID/pay -H "$UH")"
+  ck "  booking is now confirmed"      yes "$(has "$(body $B/api/bookings/$PBID -H "$UH")" '"status":"confirmed"')"
+  ck "  paying again is idempotent"    200 "$(code -X POST $B/api/bookings/$PBID/pay -H "$UH")"
+  ck "  another user cannot pay it"    404 "$(code -X POST $B/api/bookings/$PBID/pay -H "Authorization: Bearer $A")"
+fi
+
 echo "=== 7b. ticket check-in (1 route) ==="
-CIB=$(body -X POST $B/api/bookings -H "$UH" -H "$J" -d "{\"eventId\":\"$EID\",\"quantity\":1}")
+# A ticket only admits once it is paid for, so with payments on these bookings
+# have to complete the payment step before they can be scanned.
+paid_booking() {
+  local r bid
+  r=$(body -X POST $B/api/bookings -H "$UH" -H "$J" -d "{\"eventId\":\"$EID\",\"quantity\":${1:-1}}")
+  bid=$(echo "$r" | id)
+  if echo "$r" | grep -q '"status":"pending"'; then
+    code -X POST $B/api/bookings/$bid/pay -H "$UH" >/dev/null
+    r=$(body $B/api/bookings/$bid -H "$UH")
+  fi
+  echo "$r"
+}
+CIB=$(paid_booking 1)
 CODE=$(echo "$CIB" | grep -oE '"ticketCode":"[a-f0-9]+"' | sed 's/"ticketCode":"//; s/"//')
 ck "  booking carries a ticket code"     32 "${#CODE}"
 ck "  code is not the booking id"        no "$(has "$CODE" "$(echo "$CIB" | id)")"
@@ -152,12 +184,12 @@ ck "  checkedInAt is stamped"            yes "$(has "$(body $B/api/bookings -H "
 ck "  unknown code -> 404"               404 "$(code -X POST $B/api/admin/tickets/check-in -H "$AH" -H "$J" -d '{"code":"deadbeefdeadbeefdeadbeefdeadbeef"}')"
 ck "  missing code -> 400"               400 "$(code -X POST $B/api/admin/tickets/check-in -H "$AH" -H "$J" -d '{}')"
 ck "  check-in needs an admin"           403 "$(code -X POST $B/api/admin/tickets/check-in -H "$UH" -H "$J" -d "{\"code\":\"$CODE\"}")"
-CANB=$(body -X POST $B/api/bookings -H "$UH" -H "$J" -d "{\"eventId\":\"$EID\",\"quantity\":1}")
+CANB=$(paid_booking 1)
 CANCODE=$(echo "$CANB" | grep -oE '"ticketCode":"[a-f0-9]+"' | sed 's/"ticketCode":"//; s/"//')
 curl -s -m 30 -o /dev/null -X DELETE $B/api/bookings/$(echo "$CANB" | id) -H "$UH"
 ck "  cancelled ticket refused"          409 "$(code -X POST $B/api/admin/tickets/check-in -H "$AH" -H "$J" -d "{\"code\":\"$CANCODE\"}")"
 # Two doors scanning the same ticket at once must not both admit.
-RB=$(body -X POST $B/api/bookings -H "$UH" -H "$J" -d "{\"eventId\":\"$EID\",\"quantity\":1}")
+RB=$(paid_booking 1)
 RCODE=$(echo "$RB" | grep -oE '"ticketCode":"[a-f0-9]+"' | sed 's/"ticketCode":"//; s/"//')
 # curl -w prints no trailing newline, so each result needs its own line or
 # they concatenate into one unsearchable string.
@@ -231,7 +263,9 @@ echo "=== 13. discovery writes — delete (4 routes) ==="
 UT4=$(body -X POST $B/api/login -H "$J" -H "$(ip)" -d '{"email":"'"$USER_EMAIL"'","password":"'"$CURRENT_PW"'"}' | sed -E 's/.*"token":"([^"]*)".*/\1/')
 curl -s -m 30 -o /dev/null -X POST $B/api/bookings -H "Authorization: Bearer $UT4" -H "$J" -d "{\"eventId\":\"$EID\",\"quantity\":1}"
 ck "DELETE event blocked while booked"  409 "$(code -X DELETE $B/discovery/v2/events/$EID -H "$AH")"
-for b in $(body "$B/api/admin/bookings?status=confirmed&size=100" -H "$AH" | grep -oE '"id":"[a-f0-9]+"' | sed 's/"id":"//; s/"//'); do
+# Every booking, not just confirmed ones: an unpaid hold also keeps seats and
+# blocks the event delete below.
+for b in $(body "$B/api/admin/bookings?size=100" -H "$AH" | grep -oE '"id":"[a-f0-9]+"' | sed 's/"id":"//; s/"//'); do
   curl -s -m 30 -o /dev/null -X DELETE $B/api/admin/bookings/$b -H "$AH"
 done
 ck "DELETE /discovery/v2/events/{id}"         204 "$(code -X DELETE $B/discovery/v2/events/$EID -H "$AH")"

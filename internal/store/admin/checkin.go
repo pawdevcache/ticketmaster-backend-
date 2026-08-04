@@ -21,6 +21,7 @@ const (
 	CheckInValid     CheckInResult = "valid"        // admitted, first scan
 	CheckInUsed      CheckInResult = "already_used" // scanned before
 	CheckInCancelled CheckInResult = "cancelled"    // booking was cancelled
+	CheckInUnpaid    CheckInResult = "unpaid"       // held or expired, never paid for
 	CheckInUnknown   CheckInResult = "not_found"    // no such ticket code
 )
 
@@ -43,7 +44,7 @@ func (s *Store) CheckIn(code string) (CheckInResult, *models.Booking, error) {
 	err := s.BookingsCol.FindOneAndUpdate(cx,
 		bson.D{
 			{Key: "ticketCode", Value: code},
-			{Key: "status", Value: "confirmed"},
+			{Key: "status", Value: models.BookingConfirmed},
 			{Key: "checkedInAt", Value: nil},
 		},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "checkedInAt", Value: now}}}},
@@ -66,8 +67,13 @@ func (s *Store) CheckIn(code string) (CheckInResult, *models.Booking, error) {
 	if err := s.WithEvents([]*models.Booking{existing}); err != nil {
 		return "", nil, err
 	}
-	if existing.Status != "confirmed" {
+	switch existing.Status {
+	case models.BookingCancelled:
 		return CheckInCancelled, existing, nil
+	case models.BookingPending, models.BookingExpired:
+		// Seats were held but never paid for. Telling the door "cancelled"
+		// would send the holder to a refund desk over an unfinished checkout.
+		return CheckInUnpaid, existing, nil
 	}
 	return CheckInUsed, existing, nil
 }

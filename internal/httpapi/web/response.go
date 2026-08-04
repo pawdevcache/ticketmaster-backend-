@@ -10,6 +10,7 @@ import (
 
 	"ticketmaster/internal/mail"
 	"ticketmaster/internal/models"
+	"ticketmaster/internal/payment"
 	"ticketmaster/internal/store/core"
 )
 
@@ -23,6 +24,9 @@ type Deps struct {
 	// Mail is never nil: with no SMTP host configured it logs instead of
 	// sending, so handlers can call it unconditionally.
 	Mail *mail.Mailer
+	// Payments is nil when PAYMENTS is off, which is the signal to confirm a
+	// booking on creation instead of holding its seats for a charge.
+	Payments payment.Provider
 }
 
 const MaxBodyBytes = 1 << 20 // 1 MiB cap on request bodies

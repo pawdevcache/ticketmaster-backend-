@@ -20,12 +20,14 @@ package httpapi
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"ticketmaster/internal/config"
 	"ticketmaster/internal/httpapi/admin"
 	"ticketmaster/internal/httpapi/user"
 	"ticketmaster/internal/httpapi/web"
 	"ticketmaster/internal/mail"
+	"ticketmaster/internal/payment"
 	adminstore "ticketmaster/internal/store/admin"
 	"ticketmaster/internal/store/core"
 	userstore "ticketmaster/internal/store/user"
@@ -73,8 +75,28 @@ func New() (http.Handler, error) {
 	if !mailer.Live() {
 		log.Println("warning: SMTP_HOST is unset — emails will be written to the log, not sent")
 	}
-	deps := &web.Deps{Store: st, Limiter: web.NewLimiter(limit, window), Mail: mailer}
-	u := user.New(deps, userstore.New(st))
+	pay, err := payment.New(payment.Config{
+		Mode:      config.Get("PAYMENTS", "off"),
+		SecretKey: config.Get("STRIPE_SECRET_KEY", ""),
+		Currency:  config.Get("PAYMENT_CURRENCY", "usd"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if pay != nil {
+		log.Printf("payments enabled via %s; bookings hold seats until paid", pay.Name())
+	}
+	deps := &web.Deps{Store: st, Limiter: web.NewLimiter(limit, window), Mail: mailer, Payments: pay}
+	hold, _ := time.ParseDuration(config.Get("BOOKING_HOLD", "15m"))
+	ustore := userstore.New(st, hold)
+	if pay != nil {
+		if n, err := ustore.ExpireHolds(""); err != nil {
+			log.Println("warning: could not sweep expired holds:", err)
+		} else if n > 0 {
+			log.Printf("released seats from %d expired holds", n)
+		}
+	}
+	u := user.New(deps, ustore)
 	a := admin.New(deps, adminstore.New(st))
 
 	mux := http.NewServeMux()
@@ -106,7 +128,7 @@ func New() (http.Handler, error) {
 				},
 				"user": {
 					"POST /api/logout",
-					"POST /api/bookings", "GET /api/bookings",
+					"POST /api/bookings", "POST /api/bookings/{id}/pay", "GET /api/bookings",
 					"GET /api/bookings/{id}", "DELETE /api/bookings/{id}",
 				},
 				"admin": {
@@ -158,6 +180,9 @@ func New() (http.Handler, error) {
 	mux.HandleFunc("GET /api/bookings", u.ListBookings)
 	mux.HandleFunc("GET /api/bookings/{id}", u.GetBooking)
 	mux.HandleFunc("DELETE /api/bookings/{id}", u.CancelBooking)
+	// Pay for a held booking. Only mounted meaningfully when PAYMENTS is on;
+	// it answers 404 otherwise.
+	mux.HandleFunc("POST /api/bookings/{id}/pay", u.PayBooking)
 
 	// Admin accounts. Registration needs ADMIN_REGISTRATION_KEY; the resulting token
 	// is what the POST /discovery/v2/* create routes require.

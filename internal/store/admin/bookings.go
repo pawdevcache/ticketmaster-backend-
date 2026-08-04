@@ -3,6 +3,7 @@ package admin
 import (
 	"ticketmaster/internal/models"
 	"ticketmaster/internal/store/core"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -47,7 +48,7 @@ func (s *Store) DeleteBooking(id string) error {
 	if err != nil {
 		return err
 	}
-	if b.Status == "confirmed" {
+	if b.HoldsSeats() {
 		cx, cancel := core.Ctx()
 		defer cancel()
 		if err := s.ReleaseTickets(cx, b); err != nil {
@@ -55,4 +56,20 @@ func (s *Store) DeleteBooking(id string) error {
 		}
 	}
 	return core.Remove(s.BookingsCol, id)
+}
+
+// activelyHeld matches bookings whose seats are withheld from an event at this
+// moment: paid ones, and unpaid holds that have not yet run out of time.
+//
+// The deadline is compared here rather than trusting the stored status,
+// because expiry is swept lazily — a hold can be past its deadline, still
+// recorded as pending, and holding nothing.
+func activelyHeld() bson.E {
+	return bson.E{Key: "$or", Value: bson.A{
+		bson.D{{Key: "status", Value: models.BookingConfirmed}},
+		bson.D{
+			{Key: "status", Value: models.BookingPending},
+			{Key: "holdExpiresAt", Value: bson.D{{Key: "$gt", Value: time.Now()}}},
+		},
+	}}
 }

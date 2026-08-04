@@ -14,13 +14,13 @@ import (
 // Cancel marks a booking cancelled and returns its tickets to the event. It is
 // a no-op on an already-cancelled booking, so retries stay safe.
 func (s *Store) Cancel(b *models.Booking) (*models.Booking, error) {
-	if b.Status != "confirmed" {
+	if !b.HoldsSeats() {
 		return b, nil
 	}
 	cx, cancel := Ctx()
 	defer cancel()
 	if _, err := s.BookingsCol.UpdateByID(cx, b.ID,
-		bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "cancelled"}}}}); err != nil {
+		bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: models.BookingCancelled}}}}); err != nil {
 		return nil, err
 	}
 	if err := s.ReleaseTickets(cx, b); err != nil {

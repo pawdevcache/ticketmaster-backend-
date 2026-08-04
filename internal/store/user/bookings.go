@@ -13,16 +13,29 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// Book reserves qty tickets on an event and records the booking. The seat
-// count is decremented with a single conditional update, so two buyers racing
-// for the last tickets can't both succeed. Returns core.ErrNotFound for an unknown
-// event and core.ErrSoldOut when it isn't on sale or hasn't enough tickets left.
-func (s *Store) Book(userID, eventID string, qty int) (*models.Booking, error) {
+// Book reserves qty tickets on an event and records the booking.
+//
+// The seat count is decremented with a single conditional update, so two
+// buyers racing for the last tickets can't both succeed. Returns
+// core.ErrNotFound for an unknown event and core.ErrSoldOut when it isn't on
+// sale or hasn't enough tickets left.
+//
+// When holdSeats is false the booking is confirmed immediately, which is what
+// happens with payments turned off; otherwise it is pending and must be paid
+// before the hold lapses.
+func (s *Store) Book(userID, eventID string, qty int, holdSeats bool) (*models.Booking, error) {
 	if qty < 1 {
 		return nil, core.ErrSoldOut
 	}
 	if _, err := s.Event(eventID); err != nil {
 		return nil, err // core.ErrNotFound
+	}
+	// Reclaim any lapsed holds on this event first, so an abandoned checkout
+	// does not make a seat look sold to the next buyer. Doing it here rather
+	// than on a timer keeps it working on serverless, where no background
+	// goroutine is guaranteed to run.
+	if _, err := s.ExpireHolds(eventID); err != nil {
+		return nil, err
 	}
 	// Atomically reserve tickets only if enough remain and the event is on sale.
 	cx, cancel := core.Ctx()
@@ -54,8 +67,12 @@ func (s *Store) Book(userID, eventID string, qty int) (*models.Booking, error) {
 	}
 	b := &models.Booking{
 		ID: core.NewID(), UserID: userID, EventID: eventID, Quantity: qty,
-		Total: e.PriceMin * float64(qty), Status: "confirmed", CreatedAt: time.Now(),
+		Total: e.PriceMin * float64(qty), Status: models.BookingConfirmed, CreatedAt: time.Now(),
 		TicketCode: code,
+	}
+	if holdSeats {
+		deadline := time.Now().Add(s.hold)
+		b.Status, b.HoldExpiresAt = models.BookingPending, &deadline
 	}
 	if err := core.Insert(s.BookingsCol, b); err != nil {
 		return nil, err

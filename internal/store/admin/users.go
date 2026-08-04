@@ -42,7 +42,8 @@ func (s *Store) UpdateUser(u *models.User) error {
 // the user holds confirmed bookings, so ticket holders can't vanish silently.
 func (s *Store) DeleteUser(id string) error {
 	booked, err := core.AnyMatch(s.BookingsCol, bson.D{
-		{Key: "userId", Value: id}, {Key: "status", Value: "confirmed"},
+		{Key: "userId", Value: id},
+		activelyHeld(),
 	})
 	if err != nil {
 		return err

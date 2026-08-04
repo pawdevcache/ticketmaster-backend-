@@ -1142,6 +1142,54 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /api/bookings/{id}/pay:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    post:
+      tags: [Bookings]
+      summary: Confirm payment for a held booking
+      description: |
+        Turns a `pending` booking into a `confirmed` one, once the payment
+        provider confirms the charge actually succeeded.
+
+        The server asks the provider directly — the client only says which
+        booking it is paying for. Trusting a client that claims "paid" would
+        hand out tickets for free.
+
+        Only meaningful when payments are enabled; answers 404 otherwise.
+        Calling it twice is safe: an already-paid booking returns 200.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Paid, or already paid
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  booking: { $ref: "#/components/schemas/Booking" }
+                  status: { type: string, enum: [paid, "already paid"] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "402":
+          description: The charge has not completed at the provider
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No such booking, or payments are not enabled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The hold expired, or the booking is not awaiting payment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: The payment provider could not be reached; the hold stands, so retry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /api/bookings/{id}:
     parameters: [{ $ref: "#/components/parameters/Id" }]
     get:
@@ -1385,7 +1433,13 @@ components:
         eventId: { type: string }
         quantity: { type: integer, example: 2 }
         total: { type: number, format: double, description: quantity × the event's priceMin }
-        status: { type: string, enum: [confirmed, cancelled] }
+        status:
+          type: string
+          enum: [pending, confirmed, cancelled, expired]
+          description: |
+            pending and confirmed both withhold seats from the event;
+            cancelled and expired return them. A booking is only pending when
+            payments are enabled.
         createdAt: { type: string, format: date-time, readOnly: true }
         ticketCode:
           type: string
@@ -1400,6 +1454,16 @@ components:
           format: date-time
           readOnly: true
           description: When the ticket was scanned at the door. Absent until then, and never cleared.
+        holdExpiresAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Deadline for paying a pending booking. Absent once it is no longer pending.
+        paymentIntentId:
+          type: string
+          readOnly: true
+          description: The charge at the payment provider, kept for reconciliation.
+        paidAt: { type: string, format: date-time, readOnly: true }
         event:
           allOf:
             - $ref: "#/components/schemas/EventSummary"
@@ -1453,7 +1517,7 @@ components:
       properties:
         result:
           type: string
-          enum: [valid, already_used, cancelled, not_found]
+          enum: [valid, already_used, cancelled, unpaid, not_found]
           description: |
             Why the scan was accepted or refused. `already_used` is kept
             distinct from `not_found` so a door can tell a duplicated ticket

@@ -77,6 +77,26 @@ type User struct {
 // IsAdmin reports whether the account may use the admin endpoints.
 func (u *User) IsAdmin() bool { return u.Role == RoleAdmin }
 
+// Booking statuses.
+//
+// A booking's seats are withheld from the event while it is Pending or
+// Confirmed, and returned when it becomes Cancelled or Expired. That is the
+// rule the whole ticket count depends on: a hold has to reserve seats or two
+// buyers could pay for the same one, and it has to give them back or an
+// abandoned checkout would retire them permanently.
+const (
+	BookingPending   = "pending"   // seats held, awaiting payment
+	BookingConfirmed = "confirmed" // paid, or booked while payments are off
+	BookingCancelled = "cancelled" // withdrawn by the holder or an admin
+	BookingExpired   = "expired"   // hold lapsed unpaid
+)
+
+// HoldsSeats reports whether this booking is currently withholding seats from
+// its event.
+func (b *Booking) HoldsSeats() bool {
+	return b.Status == BookingPending || b.Status == BookingConfirmed
+}
+
 // Booking is a user's claim on some of an event's tickets. Cancelling sets
 // Status rather than deleting the row, so the history survives.
 type Booking struct {
@@ -85,8 +105,18 @@ type Booking struct {
 	EventID   string    `json:"eventId" bson:"eventId"`
 	Quantity  int       `json:"quantity" bson:"quantity"`
 	Total     float64   `json:"total" bson:"total"`
-	Status    string    `json:"status" bson:"status"` // confirmed, cancelled
+	Status    string    `json:"status" bson:"status"` // see the Booking* constants
 	CreatedAt time.Time `json:"createdAt" bson:"createdAt"`
+
+	// HoldExpiresAt is the deadline for paying a pending booking. Its seats
+	// are already withheld from the event, so an unpaid hold that outlives
+	// this is swept back into circulation. nil once the booking leaves the
+	// pending state.
+	HoldExpiresAt *time.Time `json:"holdExpiresAt,omitempty" bson:"holdExpiresAt,omitempty"`
+	// PaymentIntentID identifies the charge at the payment provider. Kept for
+	// reconciliation: it is the only handle linking a booking to money.
+	PaymentIntentID string     `json:"paymentIntentId,omitempty" bson:"paymentIntentId,omitempty"`
+	PaidAt          *time.Time `json:"paidAt,omitempty" bson:"paidAt,omitempty"`
 
 	// TicketCode is what the QR encodes and what check-in consumes. It is a
 	// server-generated random value rather than the booking id, because ids

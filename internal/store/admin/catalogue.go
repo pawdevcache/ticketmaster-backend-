@@ -35,7 +35,8 @@ func (s *Store) UpdateEvent(e *models.Event) error {
 // nobody loses a ticket they paid for. Cancelled bookings don't block it.
 func (s *Store) DeleteEvent(id string) error {
 	booked, err := core.AnyMatch(s.BookingsCol, bson.D{
-		{Key: "eventId", Value: id}, {Key: "status", Value: "confirmed"},
+		{Key: "eventId", Value: id},
+		activelyHeld(),
 	})
 	if err != nil {
 		return err
