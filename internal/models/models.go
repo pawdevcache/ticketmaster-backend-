@@ -98,11 +98,15 @@ type Booking struct {
 // EventSummary is the slice of an event a ticket needs: what it is, when, and
 // where. Enough to print a ticket and build a calendar entry.
 type EventSummary struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Date      Date   `json:"date"`
-	Status    string `json:"status"`
-	VenueID   string `json:"venueId,omitempty"`
-	VenueName string `json:"venueName,omitempty"`
-	VenueCity string `json:"venueCity,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Date   Date   `json:"date"`
+	Status string `json:"status"`
+	// Venue fields are flattened rather than nested, so a ticket or a calendar
+	// entry can be rendered straight from the booking. Address is included
+	// because "where" on a ticket means a street, not just a city.
+	VenueID      string `json:"venueId,omitempty"`
+	VenueName    string `json:"venueName,omitempty"`
+	VenueAddress string `json:"venueAddress,omitempty"`
+	VenueCity    string `json:"venueCity,omitempty"`
 }

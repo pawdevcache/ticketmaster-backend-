@@ -1344,6 +1344,7 @@ components:
         status: { type: string, enum: [onsale, offsale, cancelled] }
         venueId: { type: string }
         venueName: { type: string, example: National Arena }
+        venueAddress: { type: string, example: 1 Independence Square }
         venueCity: { type: string, example: Colombo }
 
     Analytics:

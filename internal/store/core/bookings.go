@@ -85,7 +85,7 @@ func (s *Store) WithEvents(bookings []*models.Booking) error {
 			ID: e.ID, Name: e.Name, Date: e.Date, Status: e.Status, VenueID: e.VenueID,
 		}
 		if v := venues[e.VenueID]; v != nil {
-			sum.VenueName, sum.VenueCity = v.Name, v.City
+			sum.VenueName, sum.VenueAddress, sum.VenueCity = v.Name, v.Address, v.City
 		}
 		summaries[e.ID] = sum
 	}
