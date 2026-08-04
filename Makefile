@@ -13,9 +13,10 @@ endif
 PKG     := ./cmd/server
 IMAGE   := ticketmaster-api
 PORT    ?= 8080
+BASE_URL ?= http://localhost:$(PORT)
 
 .DEFAULT_GOAL := help
-.PHONY: help run build test cover fmt vet check tidy docker docker-run clean
+.PHONY: help run build test cover fmt vet check tidy docker docker-run clean test-api
 
 help: ## Show this help
 	@printf 'Targets:\n'
@@ -66,3 +67,6 @@ docker-run: ## Run the image, reading config from .env on the host
 
 clean: ## Remove build artefacts
 	rm -f $(BINARY) coverage.out
+
+test-api: ## End-to-end check of every route against a running API
+	@BASE_URL=$(BASE_URL) bash scripts/test_api.sh
