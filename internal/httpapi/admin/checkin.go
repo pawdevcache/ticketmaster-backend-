@@ -2,6 +2,7 @@ package admin
 
 import (
 	"net/http"
+	"time"
 
 	"ticketmaster/internal/httpapi/web"
 	adminstore "ticketmaster/internal/store/admin"
@@ -29,7 +30,7 @@ func (h *Handlers) CheckIn(w http.ResponseWriter, r *http.Request) {
 		web.Fail(w, http.StatusBadRequest, "ticket code required")
 		return
 	}
-	result, booking, err := h.AdminStore.CheckIn(req.Code)
+	result, booking, err := h.AdminStore.CheckIn(req.Code, time.Time{})
 	if err != nil {
 		web.ServerError(w, err)
 		return
@@ -66,4 +67,55 @@ func checkInMessage(r adminstore.CheckInResult) string {
 	default:
 		return "no ticket matches that code"
 	}
+}
+
+// maxBulkScans bounds one flush. A gate that was offline for an evening still
+// fits comfortably; anything larger is a mistake worth rejecting outright.
+const maxBulkScans = 1000
+
+// CheckInBulk admits a batch of scans queued by a gate that was offline.
+//
+// Each scan carries its own scannedAt, so a ticket records the moment it went
+// through the door rather than the moment the network came back. Outcomes are
+// per scan and the response is always 200: one refused ticket in a batch of
+// three hundred is a fact to report, not a failed request.
+func (h *Handlers) CheckInBulk(w http.ResponseWriter, r *http.Request) {
+	if h.AdminAuth(w, r) == nil {
+		return
+	}
+	var req struct {
+		Scans []struct {
+			Code      string    `json:"code"`
+			ScannedAt time.Time `json:"scannedAt"`
+		} `json:"scans"`
+	}
+	if web.ReadJSON(w, r, &req) != nil || len(req.Scans) == 0 {
+		web.Fail(w, http.StatusBadRequest, "scans required")
+		return
+	}
+	if len(req.Scans) > maxBulkScans {
+		web.Fail(w, http.StatusRequestEntityTooLarge, "too many scans in one batch")
+		return
+	}
+	results := make([]map[string]any, 0, len(req.Scans))
+	summary := map[string]int{}
+	for _, s := range req.Scans {
+		row := map[string]any{"code": s.Code}
+		result, b, err := h.AdminStore.CheckIn(s.Code, s.ScannedAt)
+		if err != nil {
+			// Keep going: one database hiccup must not discard the rest of a
+			// flush that a gate cannot easily replay.
+			result = "error"
+			row["message"] = "could not be processed, retry this scan"
+		} else {
+			row["message"] = checkInMessage(result)
+			if b != nil {
+				row["bookingId"] = b.ID
+			}
+		}
+		row["result"] = result
+		summary[string(result)]++
+		results = append(results, row)
+	}
+	web.WriteJSON(w, http.StatusOK, map[string]any{"results": results, "summary": summary})
 }

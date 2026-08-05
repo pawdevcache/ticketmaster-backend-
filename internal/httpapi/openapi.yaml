@@ -890,6 +890,83 @@ paths:
                 result: already_used
                 message: this ticket has already been scanned
 
+  /api/admin/tickets/check-in/bulk:
+    post:
+      tags: [Admin — bookings]
+      summary: Admit a batch of scans queued while offline
+      description: |
+        For a gate with poor connectivity: queue scans locally, then flush them
+        in one request when the network returns.
+
+        Each scan carries its own `scannedAt`, so a ticket records the moment it
+        went through the door rather than the moment the network came back.
+        Omit it and the server uses the time it received the batch.
+
+        Always 200. Outcomes are per scan, using the same `result` values as a
+        single check-in plus `error` for a scan the server could not process —
+        one refused ticket in a batch of three hundred is a fact to report, not
+        a failed request. Re-flushing a batch is safe: an already-admitted
+        ticket comes back as `already_used`.
+
+        At most 1000 scans per batch.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scans]
+              properties:
+                scans:
+                  type: array
+                  maxItems: 1000
+                  items:
+                    type: object
+                    required: [code]
+                    properties:
+                      code: { type: string }
+                      scannedAt: { type: string, format: date-time }
+            example:
+              scans:
+                - { code: 9f3c1d7a5b2e480c9a6f1e2d3c4b5a60, scannedAt: "2026-09-01T19:12:04Z" }
+                - { code: 01242ba4b8cb45dac0ec07929cdeda41, scannedAt: "2026-09-01T19:12:31Z" }
+      responses:
+        "200":
+          description: Per-scan outcomes and a tally
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: { type: string }
+                        result: { type: string, enum: [valid, already_used, cancelled, unpaid, not_found, error] }
+                        message: { type: string }
+                        bookingId: { type: string }
+                  summary:
+                    type: object
+                    additionalProperties: { type: integer }
+                    description: Count per result value.
+              example:
+                summary: { valid: 2, already_used: 1 }
+        "400":
+          description: No scans supplied
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413":
+          description: More than 1000 scans in one batch
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /api/admin/door:
     get:
       tags: [Admin — bookings]

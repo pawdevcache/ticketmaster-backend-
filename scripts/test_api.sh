@@ -202,6 +202,19 @@ ck "  concurrent scans admit exactly 1"  1 "$(grep -c '^200$' "$RACE")"
 ck "  the rest are refused"              4 "$(grep -c '^409$' "$RACE")"
 rm -f "$RACE"
 
+echo "=== 7bb. bulk / offline check-in (1 route) ==="
+B1=$(paid_booking 1); B2=$(paid_booking 1)
+K1=$(echo "$B1" | grep -oE '"ticketCode":"[a-f0-9]+"' | sed 's/"ticketCode":"//; s/"//')
+K2=$(echo "$B2" | grep -oE '"ticketCode":"[a-f0-9]+"' | sed 's/"ticketCode":"//; s/"//')
+BULK=$(body -X POST $B/api/admin/tickets/check-in/bulk -H "$AH" -H "$J" -d "{\"scans\":[{\"code\":\"$K1\",\"scannedAt\":\"2026-01-02T19:12:04Z\"},{\"code\":\"$K2\"},{\"code\":\"nosuchcode\"}]}")
+ck "POST .../check-in/bulk"              200 "$(code -X POST $B/api/admin/tickets/check-in/bulk -H "$AH" -H "$J" -d "{\"scans\":[{\"code\":\"nosuchcode\"}]}")"
+ck "  two admitted, one unknown"         yes "$(has "$BULK" '"valid":2')"
+ck "  unknown code reported per scan"    yes "$(has "$BULK" 'not_found')"
+ck "  offline scannedAt is preserved"    yes "$(has "$(body $B/api/bookings -H "$UH")" '"checkedInAt":"2026-01-02T19:12:04Z"')"
+ck "  re-flushing is safe"               yes "$(has "$(body -X POST $B/api/admin/tickets/check-in/bulk -H "$AH" -H "$J" -d "{\"scans\":[{\"code\":\"$K1\"}]}")" 'already_used')"
+ck "  empty batch -> 400"                400 "$(code -X POST $B/api/admin/tickets/check-in/bulk -H "$AH" -H "$J" -d '{"scans":[]}')"
+ck "  bulk needs an admin"               403 "$(code -X POST $B/api/admin/tickets/check-in/bulk -H "$UH" -H "$J" -d "{\"scans\":[{\"code\":\"$K1\"}]}")"
+
 echo "=== 7c. door dashboard (1 route) ==="
 DOOR=$(body "$B/api/admin/door?eventId=$EID" -H "$AH")
 ck "GET /api/admin/door"                 200 "$(code $B/api/admin/door -H "$AH")"
