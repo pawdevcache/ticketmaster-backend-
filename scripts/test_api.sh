@@ -129,6 +129,26 @@ ck "POST /api/login"             200 "$(code -X POST $B/api/login -H "$J" -H "$(
 ck "  role is user, not admin"   yes "$(has "$UR" '"role":"user"')"
 ck "  self-promotion ignored"    yes "$(has "$(body -X POST $B/api/register -H "$J" -H "$(ip)" -d '{"name":"Eve","email":"'"$EVE_EMAIL"'","password":"pw12345","role":"admin"}')" '"role":"user"')"
 
+echo "=== 6b. profile (3 routes) ==="
+# A second session for the same account, so the revocation below is visible.
+OTHERTOK=$(body -X POST $B/api/login -H "$J" -H "$(ip)" -d '{"email":"'"$USER_EMAIL"'","password":"pw12345"}' | sed -E 's/.*"token":"([^"]*)".*/\1/')
+ck "GET /api/me"                        200 "$(code $B/api/me -H "$UH")"
+ck "  returns the caller"               yes "$(has "$(body $B/api/me -H "$UH")" "$USER_EMAIL")"
+ck "  no password hash"                 no  "$(has "$(body $B/api/me -H "$UH")" '"password"')"
+ck "PATCH /api/me (name only)"          200 "$(code -X PATCH $B/api/me -H "$UH" -H "$J" -d '{"name":"Renamed"}')"
+ck "  name changed"                     yes "$(has "$(body $B/api/me -H "$UH")" '"name":"Renamed"')"
+ck "  email change needs the password"  403 "$(code -X PATCH $B/api/me -H "$UH" -H "$J" -d '{"email":"hijack-'"$RUN"'@example.test"}')"
+ck "  password change needs it too"     403 "$(code -X PATCH $B/api/me -H "$UH" -H "$J" -d '{"newPassword":"brandnew1"}')"
+ck "  wrong current password"           403 "$(code -X PATCH $B/api/me -H "$UH" -H "$J" -d '{"newPassword":"brandnew1","currentPassword":"wrong"}')"
+ck "  role cannot be self-promoted"     yes "$(has "$(body -X PATCH $B/api/me -H "$UH" -H "$J" -d '{"role":"admin","name":"Renamed"}')" '"role":"user"')"
+ck "  short new password -> 400"        400 "$(code -X PATCH $B/api/me -H "$UH" -H "$J" -d '{"newPassword":"abc","currentPassword":"pw12345"}')"
+ck "  taking another email -> 409"      409 "$(code -X PATCH $B/api/me -H "$UH" -H "$J" -d '{"email":"'"$ADMIN_EMAIL"'","currentPassword":"pw12345"}')"
+ck "PUT /api/me with the password"      200 "$(code -X PUT $B/api/me -H "$UH" -H "$J" -d '{"newPassword":"changed99","currentPassword":"pw12345"}')"
+ck "  new password signs in"            200 "$(code -X POST $B/api/login -H "$J" -H "$(ip)" -d '{"email":"'"$USER_EMAIL"'","password":"changed99"}')"
+ck "  the calling session survives"     200 "$(code $B/api/me -H "$UH")"
+ck "  other sessions are revoked"       401 "$(code $B/api/me -H "Authorization: Bearer $OTHERTOK")"
+ck "  unauthenticated -> 401"           401 "$(code $B/api/me)"
+
 echo "=== 7. bookings (4 routes) ==="
 BK=$(body -X POST $B/api/bookings -H "$UH" -H "$J" -d "{\"eventId\":\"$EID\",\"quantity\":3}")
 BID=$(echo "$BK" | id)
