@@ -890,6 +890,45 @@ paths:
                 result: already_used
                 message: this ticket has already been scanned
 
+  /api/admin/door:
+    get:
+      tags: [Admin — bookings]
+      summary: Door dashboard — sold versus admitted
+      description: |
+        How many tickets each event has sold and how many have been scanned in,
+        busiest first. Computed per request, so it can be polled during a
+        performance.
+
+        Admitted counts a booking's whole quantity, because one scan admits the
+        whole booking. Only confirmed bookings count: an unpaid hold has sold
+        nothing and a cancelled one returned its seats.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: eventId, in: query, schema: { type: string }, description: Limit to one event }
+      responses:
+        "200":
+          description: One row per event with sales
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        eventId: { type: string }
+                        name: { type: string }
+                        capacity: { type: integer, description: The event's ticketsTotal }
+                        sold: { type: integer }
+                        admitted: { type: integer }
+              example:
+                events:
+                  - { eventId: 6a71…, name: Rock Night, capacity: 500, sold: 320, admitted: 287 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
   # ----------------------------------------------------------- admin: users
 
   /api/admin/users:

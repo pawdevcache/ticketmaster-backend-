@@ -202,6 +202,13 @@ ck "  concurrent scans admit exactly 1"  1 "$(grep -c '^200$' "$RACE")"
 ck "  the rest are refused"              4 "$(grep -c '^409$' "$RACE")"
 rm -f "$RACE"
 
+echo "=== 7c. door dashboard (1 route) ==="
+DOOR=$(body "$B/api/admin/door?eventId=$EID" -H "$AH")
+ck "GET /api/admin/door"                 200 "$(code $B/api/admin/door -H "$AH")"
+ck "  reports sold and admitted"         yes "$(has "$DOOR" '"sold":.*"admitted":\|"admitted":.*"sold":')"
+ck "  admitted is at most sold"          ok  "$(echo "$DOOR" | grep -oE '"sold":[0-9]+|"admitted":[0-9]+' | tr '\n' ' ' | awk '{gsub(/[^0-9 ]/,""); if ($1+0 >= $2+0) print "ok"; else print "admitted > sold"}')"
+ck "  needs an admin"                    403 "$(code $B/api/admin/door -H "$UH")"
+
 echo "=== 8. admin bookings (4 routes) ==="
 ck "GET /api/admin/bookings"     200 "$(code $B/api/admin/bookings -H "$AH")"
 AB=$(body "$B/api/admin/bookings?status=confirmed" -H "$AH")

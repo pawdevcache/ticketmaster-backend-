@@ -30,3 +30,14 @@ type CategoryTickets struct {
 	Tickets          int     `json:"tickets" bson:"tickets"`
 	Revenue          float64 `json:"revenue" bson:"revenue"`
 }
+
+// DoorStats is one row of the door dashboard: how many tickets an event has
+// sold and how many have walked through. Admitted counts a booking's whole
+// quantity, since one scan admits the whole booking.
+type DoorStats struct {
+	EventID  string `json:"eventId" bson:"eventId"`
+	Name     string `json:"name" bson:"name"`
+	Capacity int    `json:"capacity" bson:"capacity"`
+	Sold     int    `json:"sold" bson:"sold"`
+	Admitted int    `json:"admitted" bson:"admitted"`
+}

@@ -136,7 +136,7 @@ func New() (http.Handler, error) {
 					"POST /discovery/v2/{events|venues|attractions|classifications}",
 					"PUT|PATCH /discovery/v2/{events|venues|attractions|classifications}/{id}",
 					"DELETE /discovery/v2/{events|venues|attractions|classifications}/{id}",
-					"GET /api/admin/analytics", "POST /api/admin/tickets/check-in",
+					"GET /api/admin/analytics", "POST /api/admin/tickets/check-in", "GET /api/admin/door",
 					"GET /api/admin/users", "GET /api/admin/users/{id}",
 					"PUT|PATCH /api/admin/users/{id}", "DELETE /api/admin/users/{id}",
 					"GET /api/admin/bookings", "GET /api/admin/bookings/{id}",
@@ -195,6 +195,7 @@ func New() (http.Handler, error) {
 
 	// Gate check-in: scan a ticket QR code and admit its holder.
 	mux.HandleFunc("POST /api/admin/tickets/check-in", a.CheckIn)
+	mux.HandleFunc("GET /api/admin/door", a.Door)
 
 	// Admin management of accounts and of every user's bookings.
 	mux.HandleFunc("GET /api/admin/users", a.ListUsers)
