@@ -149,6 +149,26 @@ ck "  the calling session survives"     200 "$(code $B/api/me -H "$UH")"
 ck "  other sessions are revoked"       401 "$(code $B/api/me -H "Authorization: Bearer $OTHERTOK")"
 ck "  unauthenticated -> 401"           401 "$(code $B/api/me)"
 
+echo "=== 6c. search history (4 routes) ==="
+ck "GET /api/me/searches (empty)"       200 "$(code $B/api/me/searches -H "$UH")"
+ck "POST /api/me/searches"              204 "$(code -X POST $B/api/me/searches -H "$UH" -H "$J" -d '{"term":"rock"}')"
+code -X POST $B/api/me/searches -H "$UH" -H "$J" -d '{"term":"jazz"}' >/dev/null
+SEARCHES=$(body $B/api/me/searches -H "$UH")
+ck "  history lists both terms"         yes "$(has "$SEARCHES" '"term":"rock"')"
+ck "  most recent first"                yes "$(has "$SEARCHES" '"term":"jazz".*"term":"rock"')"
+code -X POST $B/api/me/searches -H "$UH" -H "$J" -d '{"term":"rock"}' >/dev/null
+ck "  repeat does not duplicate"        1 "$(body $B/api/me/searches -H "$UH" | grep -o '"term":"rock"' | wc -l)"
+ck "  repeat moves it to the top"       yes "$(has "$(body $B/api/me/searches -H "$UH")" '"term":"rock".*"term":"jazz"')"
+ck "  blank term is ignored"            204 "$(code -X POST $B/api/me/searches -H "$UH" -H "$J" -d '{"term":"   "}')"
+ck "  still two entries"                2 "$(body $B/api/me/searches -H "$UH" | grep -o '"term"' | wc -l)"
+SID=$(body $B/api/me/searches -H "$UH" | id)
+ck "DELETE /api/me/searches/{id}"       204 "$(code -X DELETE $B/api/me/searches/$SID -H "$UH")"
+ck "  one entry left"                   1 "$(body $B/api/me/searches -H "$UH" | grep -o '"term"' | wc -l)"
+ck "DELETE /api/me/searches (clear)"    204 "$(code -X DELETE $B/api/me/searches -H "$UH")"
+ck "  history is empty"                 0 "$(body $B/api/me/searches -H "$UH" | grep -o '"term"' | wc -l)"
+ck "  history needs a token"            401 "$(code $B/api/me/searches)"
+ck "  one user cannot see another's"    0 "$(body $B/api/me/searches -H "$AH" | grep -o '"term":"jazz"' | wc -l)"
+
 echo "=== 7. bookings (4 routes) ==="
 BK=$(body -X POST $B/api/bookings -H "$UH" -H "$J" -d "{\"eventId\":\"$EID\",\"quantity\":3}")
 BID=$(echo "$BK" | id)

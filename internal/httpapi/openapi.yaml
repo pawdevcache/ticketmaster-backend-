@@ -712,6 +712,74 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /api/me/searches:
+    get:
+      tags: [Auth]
+      summary: Your recent search terms
+      description: Most recent first, up to 20. Terms are unique per user.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Recent searches
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  searches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        term: { type: string, example: rock }
+                        searchedAt: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Auth]
+      summary: Remember a search term
+      description: |
+        Call this when a search is submitted, not on every keystroke.
+
+        History is recorded here rather than as a side effect of the discovery
+        endpoints: those are public, unauthenticated and the busiest reads in
+        the service, so writing a row per request would put a database write on
+        the hot path and record every keystroke of a type-ahead.
+
+        Repeating a term moves it back to the top instead of adding a duplicate.
+        Blank terms are ignored; long ones are truncated.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [term]
+              properties:
+                term: { type: string, example: rock }
+      responses:
+        "204": { description: Remembered }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      tags: [Auth]
+      summary: Clear your search history
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: Cleared }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/me/searches/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    delete:
+      tags: [Auth]
+      summary: Forget one search term
+      security: [{ bearerAuth: [] }]
+      responses:
+        "204": { description: "Removed, or it was not yours" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /api/forgot-password:
     post:
       tags: [Auth]

@@ -45,6 +45,12 @@ func (m *Mailer) BookingConfirmed(to string, b *models.Booking) {
 		}
 		where = strings.Join(nonEmpty(b.Event.VenueName, b.Event.VenueAddress, b.Event.VenueCity), ", ")
 	}
+	// Prefer the moment money changed hands; fall back to when the booking was
+	// made, which is the same thing when payments are off.
+	bought := b.CreatedAt
+	if b.PaidAt != nil {
+		bought = *b.PaidAt
+	}
 	body := fmt.Sprintf(`Your booking is confirmed.
 
   Event     %s
@@ -52,13 +58,16 @@ func (m *Mailer) BookingConfirmed(to string, b *models.Booking) {
   Where     %s
   Tickets   %d
   Total     %.2f
+  Purchased %s
 
 Show this code at the door:
 
   %s
 
 Reference %s
-`, name, orDash(when), orDash(where), b.Quantity, b.Total, orDash(b.TicketCode), b.ID)
+`, name, orDash(when), orDash(where), b.Quantity, b.Total,
+		bought.Format("Mon 2 Jan 2006, 15:04"),
+		orDash(b.TicketCode), b.ID)
 	m.deliver(to, "Your tickets for "+name, body)
 }
 

@@ -117,7 +117,7 @@ func TestBookingConfirmedCarriesTheTicketCode(t *testing.T) {
 		},
 	})
 	body := (*sent)[0].Body
-	for _, want := range []string{"Rock Night", "National Arena", "Colombo", "ticketcode123", "110.00", "bk1"} {
+	for _, want := range []string{"Rock Night", "National Arena", "Colombo", "ticketcode123", "110.00", "bk1", "Purchased"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body is missing %q:\n%s", want, body)
 		}
@@ -172,5 +172,26 @@ func TestHumanDuration(t *testing.T) {
 		if got := humanDuration(tc.in); got != tc.want {
 			t.Errorf("humanDuration(%v) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// A receipt without a purchase date is not a receipt. When payments are on the
+// moment money moved is the one that matters; otherwise it is the booking time.
+func TestBookingConfirmedShowsThePurchaseTime(t *testing.T) {
+	created := time.Date(2026, 3, 1, 9, 30, 0, 0, time.UTC)
+	paid := time.Date(2026, 3, 1, 9, 45, 0, 0, time.UTC)
+
+	m := New(Config{})
+	sent := capture(m)
+	m.BookingConfirmed("b@e.test", &models.Booking{ID: "bk", CreatedAt: created})
+	if !strings.Contains((*sent)[0].Body, "Sun 1 Mar 2026, 09:30") {
+		t.Errorf("unpaid booking did not show its creation time:\n%s", (*sent)[0].Body)
+	}
+
+	m2 := New(Config{})
+	sent2 := capture(m2)
+	m2.BookingConfirmed("b@e.test", &models.Booking{ID: "bk", CreatedAt: created, PaidAt: &paid})
+	if !strings.Contains((*sent2)[0].Body, "Sun 1 Mar 2026, 09:45") {
+		t.Errorf("paid booking did not show the payment time:\n%s", (*sent2)[0].Body)
 	}
 }

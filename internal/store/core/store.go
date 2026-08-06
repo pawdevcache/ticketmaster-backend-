@@ -46,6 +46,10 @@ const tokenTTL = 24 * time.Hour
 // a reset token is a temporary key to somebody's account.
 const ResetTTL = time.Hour
 
+// searchTTL bounds how long a saved search term is kept. History is a
+// convenience, not something worth retaining indefinitely.
+const searchTTL = 90 * 24 * time.Hour
+
 // MinPasswordLen is the shortest password accepted when setting a new one.
 const MinPasswordLen = 6
 
@@ -72,6 +76,7 @@ type Store struct {
 	BookingsCol *mongo.Collection
 	TokensCol   *mongo.Collection
 	ResetsCol   *mongo.Collection
+	SearchesCol *mongo.Collection
 }
 
 // NewStore prepares a store against the given MongoDB URI and database. It
@@ -102,6 +107,7 @@ func NewStore(uri, dbName string) (*Store, error) {
 		BookingsCol: db.Collection("bookings"),
 		TokensCol:   db.Collection("tokens"),
 		ResetsCol:   db.Collection("passwordResets"),
+		SearchesCol: db.Collection("searches"),
 	}, nil
 }
 

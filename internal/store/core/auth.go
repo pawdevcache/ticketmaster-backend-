@@ -113,6 +113,21 @@ func (s *Store) EnsureIndexes() error {
 	}); err != nil {
 		return err
 	}
+	// One row per user per term, so repeating a search updates its time
+	// instead of filling the history with near-duplicates.
+	if _, err := s.SearchesCol.Indexes().CreateOne(cx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "userId", Value: 1}, {Key: "term", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	}); err != nil {
+		return err
+	}
+	// History is a convenience, not a record worth keeping forever.
+	if _, err := s.SearchesCol.Indexes().CreateOne(cx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "searchedAt", Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(int32(searchTTL.Seconds())),
+	}); err != nil {
+		return err
+	}
 	// Ticket codes are looked up on every scan, and a duplicate would let one
 	// scan admit the wrong booking. Sparse, because bookings made before
 	// ticket codes existed have no value to index.

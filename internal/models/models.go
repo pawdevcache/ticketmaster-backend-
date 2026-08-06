@@ -149,3 +149,12 @@ type EventSummary struct {
 	VenueAddress string `json:"venueAddress,omitempty"`
 	VenueCity    string `json:"venueCity,omitempty"`
 }
+
+// Search is one remembered search term. Terms are unique per user: repeating a
+// search moves it back to the top rather than adding a second entry.
+type Search struct {
+	ID         string    `json:"id" bson:"_id"`
+	UserID     string    `json:"-" bson:"userId"`
+	Term       string    `json:"term" bson:"term"`
+	SearchedAt time.Time `json:"searchedAt" bson:"searchedAt"`
+}

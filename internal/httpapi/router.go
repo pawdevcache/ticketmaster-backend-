@@ -128,6 +128,7 @@ func New() (http.Handler, error) {
 				},
 				"user": {
 					"POST /api/logout", "GET /api/me", "PUT|PATCH /api/me",
+					"POST|GET|DELETE /api/me/searches", "DELETE /api/me/searches/{id}",
 					"POST /api/bookings", "POST /api/bookings/{id}/pay", "GET /api/bookings",
 					"GET /api/bookings/{id}", "DELETE /api/bookings/{id}",
 				},
@@ -175,6 +176,10 @@ func New() (http.Handler, error) {
 	mux.HandleFunc("GET /api/me", u.Me)
 	mux.HandleFunc("PUT /api/me", u.UpdateMe)
 	mux.HandleFunc("PATCH /api/me", u.UpdateMe)
+	mux.HandleFunc("POST /api/me/searches", u.RecordSearch)
+	mux.HandleFunc("GET /api/me/searches", u.Searches)
+	mux.HandleFunc("DELETE /api/me/searches", u.ClearSearches)
+	mux.HandleFunc("DELETE /api/me/searches/{id}", u.ClearSearches)
 	// Forgotten-password flow: request a token, then trade it for a new password.
 	mux.HandleFunc("POST /api/forgot-password", deps.RateLimited("forgot-password", u.ForgotPassword))
 	mux.HandleFunc("POST /api/reset-password", deps.RateLimited("reset-password", u.ResetPassword))
